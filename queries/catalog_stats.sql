@@ -11,7 +11,8 @@
 -- It does not contact site B: the numbers were copied into site_a's
 -- catalog when setup ran "ANALYZE customers" on the foreign table.
 --
--- Used by auto_manual.sql and choice_demo.sql (\ir catalog_stats.sql).
+-- Used by auto_manual.sql, bloom_cost_demo.sql and explain_demo.sql
+-- (\ir catalog_stats.sql).
 --
 
 -- Step 1: compute the three numbers and store them with \gset.

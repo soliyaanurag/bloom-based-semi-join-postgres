@@ -4,7 +4,7 @@
 
 ## 1. The problem
 
-In the Batch 4 benchmark, `bloom_dynamic` picks a large b (bits per key) for small n, so theory predicts almost no false positives. The measurements disagreed:
+In our first benchmark, the Bloom strategy sized by the cost model (b = b* from `sjb_best_bits`, then computed with the text row width) picks a large b (bits per key) for small n, so theory predicts almost no false positives. The measurements disagreed:
 
 | n | b | predicted false positives | measured |
 |---:|---:|---:|---:|
@@ -88,7 +88,7 @@ False positives among **1,000,000** keys that are not in the filter. m = ceil(n�
 | 10,000 | 16.8 | 168,000 | 12 | 313.0 | 342 | 355 | **300** |
 | 10,000 | 10.0 | 100,000 | 7 | 8,193.7 | 7,906 | 8,140 | **8,363** |
 
-The same check with the **real** benchmark keys (the distinct customer_ids of the first n orders, tested against all other customer ids). v1 reproduces the Batch 4 numbers exactly (215 and 78):
+The same check with the **real** benchmark keys (the distinct customer_ids of the first n orders, tested against all other customer ids). v1 reproduces the first benchmark's numbers exactly (215 and 78):
 
 | n | b | distinct keys | m | k | predicted | v1 | v2 | v3 |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -139,7 +139,7 @@ Possible future improvement (**not done**; it would change the fixed design deci
 
 ## 5. Effect on the benchmark
 
-We reran the full Batch 4 benchmark (`bench/run_all.sh`) after each change. All 36 rows are exactly correct every time. Results for `bloom_dynamic`, narrow rows (false positives = rows from B − distinct keys):
+We reran the full benchmark (`bench/run_all.sh`) after each change. All rows were correct every time. Results for the cost-model-sized Bloom strategy, narrow rows (false positives = rows from B − distinct keys):
 
 | n | b | distinct keys | false positives v1 → v2 → v3 | total bytes v1 → v2 → v3 | time (ms) v1 → v2 → v3 |
 |---:|---:|---:|---:|---:|---:|
@@ -148,11 +148,11 @@ We reran the full Batch 4 benchmark (`bench/run_all.sh`) after each change. All 
 | 10,000 | 16.80 | 9,955 | 335 → 310 → **315** | 214,505 → 214,086 → **214,170** | 231 → 282 → **242** |
 | 50,000 | 13.41 | 48,738 | 1,531 → 1,502 → **1,520** | 1,006,849 → 1,006,362 → **1,006,664** | 362 → 379 → **373** |
 
-- **Bytes.** At n = 100 the Bloom query now moves less than half the bytes of v1. At n = 1,000 `bloom_dynamic` (22,811 bytes) beats the exact key list (23,648 bytes). For large n nothing changes, as expected.
+- **Bytes.** At n = 100 the Bloom query now moves less than half the bytes of v1. For large n nothing changes, as expected.
 - **Time.** v2 was slower, because the first version of the new code computed all k positions before testing any bit. v3 includes an *early exit*: positions are computed one at a time and the test stops at the first 0 bit (the positions are unchanged). On its own, a full scan of the 1,000,000 customers at site B with the n = 100 filter dropped from 102.7 ms to 69.2 ms. Times are single-machine medians of 3 runs, so differences of about ±10% are noise.
 - **b sweep** (n = 10,000): the minimum is still next to the predicted b*: narrow b = 18 (b* = 16.8; b = 16 to 18 are within 0.3%), wide b = 20 (b* = 20.45).
 
-The original Batch 4 charts (v1) are kept in `docs/midsem/v1/`; `docs/midsem/` has the current (v3) ones.
+The charts in `docs/midsem/` are from version 3 (they were made again for this repository, with the `bloom_auto` strategy; see docs/WALKTHROUGH.md).
 
 ## 6. Compatibility: the filter version
 
@@ -174,7 +174,7 @@ psql -X -d site_a -f queries/fp_rate.sql     # standard experiment, large m
 psql -X -d site_a -f queries/fp_cases.sql    # the small-m cases, real keys, and the pair count
 ```
 
-The version 1 numbers come from the branch `fp-investigation` (commit `cc29986`, file `queries/fp_v1_v2.sql`), which had versions 1 and 2 side by side. The version 2 numbers can be reproduced on master at commit `8fe846c` (the last version-2 commit). Master now has only version 3.
+The version 1 and version 2 numbers come from the original project repository (https://github.com/soliyaanurag/Bloom-Filter-based-semi-join): branch `fp-investigation`, commit `cc29986`, file `queries/fp_v1_v2.sql` (versions 1 and 2 side by side), and commit `8fe846c` (the last version-2 commit). This repository has only version 3.
 
 ## References
 

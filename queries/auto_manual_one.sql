@@ -1,7 +1,7 @@
 --
 -- auto_manual_one.sql
 --
--- For ONE value of :n, builds the adaptive filter with sjb_build_auto and
+-- For ONE value of :n, builds the Bloom filter with sjb_build_auto and
 -- checks that the join with it returns exactly the baseline rows.
 -- Prints: n, sjb_info of the filter, missing_rows and extra_rows.
 -- missing_rows = (baseline EXCEPT ALL auto_join) and

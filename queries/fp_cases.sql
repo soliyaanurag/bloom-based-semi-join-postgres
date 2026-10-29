@@ -1,9 +1,11 @@
 --
 -- fp_cases.sql
 --
--- Measured vs predicted false positives for the filter sizes that
--- bloom_dynamic uses in the benchmark (small m), plus b = 10.
--- Companion to fp_rate.sql; see docs/fp_investigation.md.
+-- Measured vs predicted false positives for small filters: the sizes the
+-- cost model picked in our first benchmark (b* computed with the text row
+-- width: 26.4, 21.6 and 16.8 bits per key), plus b = 10. These are the
+-- cases of docs/fp_investigation.md, so its tables can be reproduced.
+-- Companion to fp_rate.sql.
 --
 --   m = ceil(n * b),  k = round(0.693 * b)
 --   members      = keys 1 .. n (added to the filter)
@@ -45,7 +47,7 @@ ORDER BY n, b DESC;
 -- 1000): members = the distinct customer_ids of orders with
 -- order_id <= n, non-members = every other id in 1 .. 1,000,000 (the
 -- customers that should NOT come back). m uses the number of distinct
--- keys, exactly like bench/strategies.py.
+-- keys, as bench/strategies.py does.
 WITH real_cases AS (
     SELECT n, b,
            ARRAY(SELECT DISTINCT customer_id FROM orders WHERE order_id <= n) AS keys

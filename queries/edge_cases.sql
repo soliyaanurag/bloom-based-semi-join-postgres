@@ -1,84 +1,207 @@
 --
--- edge_cases.sql: extra correctness checks written during the independent
--- verification (docs/verification_report.md, docs/manual_test_guide.md Part 7.2).
+-- edge_cases.sql
 --
--- It compares the result with the rewrite off and on (EXCEPT ALL in both
--- directions, through temp tables) for the auto, index and filter paths on:
--- NULL / duplicate / missing / negative / int4-limit keys, an empty R', and
--- several query shapes. It also checks that unsafe queries are NOT rewritten,
--- that damaged filters give errors, and that Bloom has no false negatives.
+-- Extra correctness checks of the hand-written Bloom semi-join on unusual
+-- keys and query shapes. Each check runs the plain query (baseline) and
+-- the same query with a Bloom filter (sjb_contains in the WHERE clause)
+-- and compares them with EXCEPT ALL in both directions:
+--   missing_rows = (baseline EXCEPT ALL bloom)   rows the Bloom query lost
+--   extra_rows   = (bloom EXCEPT ALL baseline)   rows it added
+-- EXCEPT ALL keeps duplicates, so both 0 means the two queries return
+-- exactly the same rows, the same number of times.
+--
+-- Cases: NULL / duplicate / missing / negative / int4-limit keys, an empty
+-- R', only NULL keys, the smallest filters, and several query shapes. The
+-- last check makes sure no key is ever lost by its own filter (no false
+-- negatives), for 100,000 random keys.
+--
+-- Pass: every missing_rows and extra_rows is 0, and both false-negative
+-- counts are 0.
 --
 -- Run in site_a:  psql -X -d site_a -f queries/edge_cases.sql
--- Pass: every "off=X on=X off-on=0 on-off=0" line, T11 counts are 0.
--- It creates the table edge_orders in site_a (dropped and recreated each run).
+-- It creates the table edge_orders in site_a (dropped and recreated on
+-- every run).
 --
+
 \pset pager off
-\set ON_ERROR_STOP 0
-SET postgres_fdw.semijoin_verbose = on;
--- E-1: edge data in a small local table
+
+-- Step 1: a small local table with edge keys:
+--   5 twice (a duplicate key), NULL, 999999 and 1000000 (the largest
+--   existing customers), -7, 2147483647 and -2147483648 (negative and int4
+--   limits, no such customer), 0 (no such customer), 1 (exists).
 DROP TABLE IF EXISTS edge_orders;
-CREATE TABLE edge_orders(order_id int primary key, customer_id int, note text);
+CREATE TABLE edge_orders (
+    order_id    int PRIMARY KEY,
+    customer_id int,
+    note        text
+);
 INSERT INTO edge_orders VALUES
- (1, 5, 'a'), (2, 5, 'a'), (3, NULL, 'b'), (4, 999999, 'c'), (5, 1000000, 'c'),
- (6, -7, 'd'), (7, 2147483647, 'd'), (8, -2147483648, 'd'), (9, 0, 'e'), (10, 1, 'e');
+    (1, 5, 'a'), (2, 5, 'a'), (3, NULL, 'b'), (4, 999999, 'c'), (5, 1000000, 'c'),
+    (6, -7, 'd'), (7, 2147483647, 'd'), (8, -2147483648, 'd'), (9, 0, 'e'), (10, 1, 'e');
 ANALYZE edge_orders;
--- helper: compare on vs off via temp tables
-CREATE OR REPLACE FUNCTION cmp(q text) RETURNS text LANGUAGE plpgsql AS $$
-DECLARE a bigint; b bigint; n_off bigint; n_on bigint;
+
+-- Step 2: a helper that runs both queries and returns the four counts.
+-- It lives in pg_temp, so it disappears at the end of the session.
+CREATE FUNCTION pg_temp.compare(test_name text, baseline_sql text, bloom_sql text,
+                                OUT test text, OUT baseline_rows bigint, OUT bloom_rows bigint,
+                                OUT missing_rows bigint, OUT extra_rows bigint)
+LANGUAGE plpgsql AS $$
 BEGIN
-  EXECUTE 'SET postgres_fdw.enable_semijoin = off';
-  EXECUTE 'DROP TABLE IF EXISTS t_off; CREATE TEMP TABLE t_off AS ' || q;
-  EXECUTE 'SET postgres_fdw.enable_semijoin = on';
-  EXECUTE 'DROP TABLE IF EXISTS t_on; CREATE TEMP TABLE t_on AS ' || q;
-  SELECT count(*) INTO n_off FROM t_off; SELECT count(*) INTO n_on FROM t_on;
-  SELECT count(*) INTO a FROM (SELECT * FROM t_off EXCEPT ALL SELECT * FROM t_on) x;
-  SELECT count(*) INTO b FROM (SELECT * FROM t_on EXCEPT ALL SELECT * FROM t_off) x;
-  RETURN format('off=%s on=%s off-on=%s on-off=%s', n_off, n_on, a, b);
-END $$;
--- run each check for all three forced paths
-CREATE OR REPLACE FUNCTION cmp3(q text) RETURNS TABLE(path text, result text) LANGUAGE plpgsql AS $$
-DECLARE p text;
-BEGIN
-  FOREACH p IN ARRAY ARRAY['auto','index','filter'] LOOP
-    EXECUTE format('SET postgres_fdw.semijoin_force_path = %L', p);
-    path := p; result := cmp(q); RETURN NEXT;
-  END LOOP;
-  EXECUTE 'RESET postgres_fdw.semijoin_force_path';
-END $$;
-\echo == T1 NULL / duplicate / boundary / missing keys
-SELECT * FROM cmp3('SELECT o.order_id, c.customer_id, c.name FROM edge_orders o JOIN customers c ON c.customer_id = o.customer_id');
-\echo == T2 empty R prime
-SELECT * FROM cmp3('SELECT o.order_id, c.name FROM edge_orders o JOIN customers c ON c.customer_id = o.customer_id WHERE o.order_id > 100');
-\echo == T3 only NULL keys
-SELECT * FROM cmp3('SELECT o.order_id, c.name FROM edge_orders o JOIN customers c ON c.customer_id = o.customer_id WHERE o.order_id = 3');
-\echo == T4 condition on foreign table and text condition on local
-SELECT * FROM cmp3($q$SELECT o.order_id, c.name FROM orders o JOIN customers c ON c.customer_id = o.customer_id WHERE o.order_id <= 5000 AND c.city = 'city_7'$q$);
-\echo == T5 comma join syntax, reversed equality, no alias
-SELECT * FROM cmp3('SELECT orders.order_id, customers.name FROM orders, customers WHERE orders.customer_id = customers.customer_id AND orders.order_id BETWEEN 100 AND 3000');
-\echo == T6 DISTINCT + ORDER BY + LIMIT
-SELECT * FROM cmp3('SELECT DISTINCT c.city FROM orders o JOIN customers c ON c.customer_id = o.customer_id WHERE o.order_id <= 20000 ORDER BY 1 LIMIT 50');
-\echo == T7 OR on local table only and IN list
-SELECT * FROM cmp3('SELECT o.order_id, c.name FROM orders o JOIN customers c ON c.customer_id = o.customer_id WHERE (o.order_id < 200 OR o.order_id > 199800) AND o.order_id NOT IN (5,6,7)');
-\echo == T8 aggregate over join
-SELECT * FROM cmp3('SELECT count(*), sum(c.customer_id::bigint) FROM orders o JOIN customers c ON c.customer_id = o.customer_id WHERE o.order_id <= 60000');
-\echo == T9 not rewritten: LEFT JOIN, OR mixing tables, volatile, two join conditions
-SET postgres_fdw.semijoin_force_path = 'index';
-EXPLAIN (COSTS OFF, VERBOSE) SELECT o.order_id, c.name FROM orders o LEFT JOIN customers c ON c.customer_id = o.customer_id WHERE o.order_id <= 10;
-EXPLAIN (COSTS OFF, VERBOSE) SELECT o.order_id, c.name FROM orders o JOIN customers c ON c.customer_id = o.customer_id WHERE o.order_id <= 10 OR c.city = 'x';
-EXPLAIN (COSTS OFF, VERBOSE) SELECT o.order_id, c.name FROM orders o JOIN customers c ON c.customer_id = o.customer_id WHERE o.order_id <= 10 + (random()*0)::int;
-EXPLAIN (COSTS OFF, VERBOSE) SELECT o.order_id, c.name FROM orders o JOIN customers c ON c.customer_id = o.customer_id AND c.customer_id = o.order_id;
-PREPARE p1(int) AS SELECT o.order_id, c.name FROM orders o JOIN customers c ON c.customer_id = o.customer_id WHERE o.order_id <= $1;
-EXPLAIN (COSTS OFF, VERBOSE) EXECUTE p1(10);
-RESET postgres_fdw.semijoin_force_path;
-\echo == T10 filter errors: wrong version, garbage, NULL
-SELECT sjb_contains(set_byte(sjb_build(ARRAY[1,2], 64, 3), 0, 2), 1);
-SELECT sjb_contains('\x0102'::bytea, 1);
-SELECT sjb_contains(set_byte(sjb_build(ARRAY[1], 64, 3), 1, 9), 1);
-SELECT sjb_contains(NULL, 1) IS NULL AS null_filter, sjb_contains(sjb_build(ARRAY[1],64,3), NULL) IS NULL AS null_key;
-\echo == T11 no false negatives: all 100000 random keys pass their own Bloom filter (tiny m and also sjb_build_auto)
-CREATE TEMP TABLE rk AS SELECT DISTINCT (random()*4e9 - 2e9)::int AS k FROM generate_series(1,100000);
-WITH f AS MATERIALIZED (SELECT sjb_build(array_agg(k), 50000, 3) AS f1,
-                               sjb_build_auto(array_agg(k), 1e6, 1, 30, 1000, 158) AS f2 FROM rk)
-SELECT count(*) AS keys, count(*) FILTER (WHERE NOT sjb_contains(f1, k)) AS fn_bloom_small,
-       count(*) FILTER (WHERE NOT sjb_contains(f2, k)) AS fn_auto, (SELECT sjb_info(f2) FROM f) AS auto_filter
-FROM rk, f;
+    test := test_name;
+    EXECUTE 'SELECT count(*) FROM (' || baseline_sql || ') AS q' INTO baseline_rows;
+    EXECUTE 'SELECT count(*) FROM (' || bloom_sql || ') AS q' INTO bloom_rows;
+    EXECUTE 'SELECT count(*) FROM ((' || baseline_sql || ') EXCEPT ALL (' || bloom_sql || ')) AS q'
+        INTO missing_rows;
+    EXECUTE 'SELECT count(*) FROM ((' || bloom_sql || ') EXCEPT ALL (' || baseline_sql || ')) AS q'
+        INTO extra_rows;
+END
+$$;
+
+-- Step 3: the checks. In every Bloom query the sub-SELECT builds the
+-- filter ONCE at site A from the keys of the same rows of R; it is sent
+-- to site B as a parameter. sjb_build_auto gets fixed statistics of
+-- customers here (1,000,000 rows, 1 row per key, 32 bytes per row,
+-- 1000 Mbit/s, 158.19 ns per check); they only change the filter size.
+SELECT * FROM pg_temp.compare(
+    'E1 NULL, duplicate, missing, negative and int4-limit keys',
+    $q$SELECT o.order_id, c.customer_id, c.name
+       FROM edge_orders o JOIN customers c ON c.customer_id = o.customer_id$q$,
+    $q$SELECT o.order_id, c.customer_id, c.name
+       FROM edge_orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE sjb_contains((SELECT sjb_build_auto(array_agg(customer_id), 1e6, 1, 32, 1000, 158.19)
+                           FROM edge_orders), c.customer_id)$q$)
+UNION ALL
+SELECT * FROM pg_temp.compare(
+    'E2 empty R'' (array_agg of no rows is NULL, so the filter is NULL)',
+    $q$SELECT o.order_id, c.name
+       FROM edge_orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE o.order_id > 100$q$,
+    $q$SELECT o.order_id, c.name
+       FROM edge_orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE o.order_id > 100
+         AND sjb_contains((SELECT sjb_build_auto(array_agg(customer_id), 1e6, 1, 32, 1000, 158.19)
+                           FROM edge_orders WHERE order_id > 100), c.customer_id)$q$)
+UNION ALL
+SELECT * FROM pg_temp.compare(
+    'E3 empty R'' with an empty array (rule a: m = 8, no bit set)',
+    $q$SELECT o.order_id, c.name
+       FROM edge_orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE o.order_id > 100$q$,
+    $q$SELECT o.order_id, c.name
+       FROM edge_orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE o.order_id > 100
+         AND sjb_contains((SELECT sjb_build_auto(ARRAY(SELECT customer_id FROM edge_orders WHERE order_id > 100),
+                                                 1e6, 1, 32, 1000, 158.19)), c.customer_id)$q$)
+UNION ALL
+SELECT * FROM pg_temp.compare(
+    'E4 only NULL keys',
+    $q$SELECT o.order_id, c.name
+       FROM edge_orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE o.order_id = 3$q$,
+    $q$SELECT o.order_id, c.name
+       FROM edge_orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE o.order_id = 3
+         AND sjb_contains((SELECT sjb_build_auto(array_agg(customer_id), 1e6, 1, 32, 1000, 158.19)
+                           FROM edge_orders WHERE order_id = 3), c.customer_id)$q$)
+UNION ALL
+SELECT * FROM pg_temp.compare(
+    'E5 smallest filter, m = 8 bits (almost every row passes)',
+    $q$SELECT o.order_id, c.name
+       FROM orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE o.order_id <= 2000$q$,
+    $q$SELECT o.order_id, c.name
+       FROM orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE o.order_id <= 2000
+         AND sjb_contains((SELECT sjb_build(array_agg(customer_id), 8, 1)
+                           FROM orders WHERE order_id <= 2000), c.customer_id)$q$)
+UNION ALL
+SELECT * FROM pg_temp.compare(
+    'E6 capped filter (rule d, max_filter_bytes = 1000: many false positives)',
+    $q$SELECT o.order_id, c.name
+       FROM orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE o.order_id <= 5000$q$,
+    $q$SELECT o.order_id, c.name
+       FROM orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE o.order_id <= 5000
+         AND sjb_contains((SELECT sjb_build_auto(array_agg(customer_id), 1e6, 1, 32, 1000, 158.19, 1000)
+                           FROM orders WHERE order_id <= 5000), c.customer_id)$q$)
+UNION ALL
+SELECT * FROM pg_temp.compare(
+    'E7 extra condition on the foreign table (c.city)',
+    $q$SELECT o.order_id, c.name
+       FROM orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE o.order_id <= 5000 AND c.city = 'city_7'$q$,
+    $q$SELECT o.order_id, c.name
+       FROM orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE o.order_id <= 5000 AND c.city = 'city_7'
+         AND sjb_contains((SELECT sjb_build_auto(array_agg(customer_id), 1e6, 1, 32, 1000, 158.19)
+                           FROM orders WHERE order_id <= 5000), c.customer_id)$q$)
+UNION ALL
+SELECT * FROM pg_temp.compare(
+    'E8 comma join, reversed equality, no aliases',
+    $q$SELECT orders.order_id, customers.name
+       FROM orders, customers
+       WHERE orders.customer_id = customers.customer_id
+         AND orders.order_id BETWEEN 100 AND 3000$q$,
+    $q$SELECT orders.order_id, customers.name
+       FROM orders, customers
+       WHERE orders.customer_id = customers.customer_id
+         AND orders.order_id BETWEEN 100 AND 3000
+         AND sjb_contains((SELECT sjb_build_auto(array_agg(customer_id), 1e6, 1, 32, 1000, 158.19)
+                           FROM orders WHERE order_id BETWEEN 100 AND 3000), customers.customer_id)$q$)
+UNION ALL
+SELECT * FROM pg_temp.compare(
+    'E9 DISTINCT + ORDER BY + LIMIT',
+    $q$SELECT DISTINCT c.city
+       FROM orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE o.order_id <= 20000
+       ORDER BY 1 LIMIT 50$q$,
+    $q$SELECT DISTINCT c.city
+       FROM orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE o.order_id <= 20000
+         AND sjb_contains((SELECT sjb_build_auto(array_agg(customer_id), 1e6, 1, 32, 1000, 158.19)
+                           FROM orders WHERE order_id <= 20000), c.customer_id)
+       ORDER BY 1 LIMIT 50$q$)
+UNION ALL
+SELECT * FROM pg_temp.compare(
+    'E10 OR on the local table and NOT IN',
+    $q$SELECT o.order_id, c.name
+       FROM orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE (o.order_id < 200 OR o.order_id > 199800) AND o.order_id NOT IN (5, 6, 7)$q$,
+    $q$SELECT o.order_id, c.name
+       FROM orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE (o.order_id < 200 OR o.order_id > 199800) AND o.order_id NOT IN (5, 6, 7)
+         AND sjb_contains((SELECT sjb_build_auto(array_agg(customer_id), 1e6, 1, 32, 1000, 158.19)
+                           FROM orders
+                           WHERE (order_id < 200 OR order_id > 199800) AND order_id NOT IN (5, 6, 7)),
+                          c.customer_id)$q$)
+UNION ALL
+SELECT * FROM pg_temp.compare(
+    'E11 aggregate over the join (one row)',
+    $q$SELECT count(*), sum(c.customer_id::bigint)
+       FROM orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE o.order_id <= 60000$q$,
+    $q$SELECT count(*), sum(c.customer_id::bigint)
+       FROM orders o JOIN customers c ON c.customer_id = o.customer_id
+       WHERE o.order_id <= 60000
+         AND sjb_contains((SELECT sjb_build_auto(array_agg(customer_id), 1e6, 1, 32, 1000, 158.19)
+                           FROM orders WHERE order_id <= 60000), c.customer_id)$q$);
+
+-- Step 4: no false negatives. 100,000 random keys anywhere in the int4
+-- range (setseed makes them the same on every run) must all pass their
+-- own filter: a tiny one (sjb_build, 50,000 bits for about 100,000 keys,
+-- k = 3) and the one sjb_build_auto sizes.
+SELECT setseed(0.42);
+CREATE TEMP TABLE random_keys AS
+    SELECT DISTINCT (random() * 4e9 - 2e9)::int AS key
+    FROM generate_series(1, 100000);
+WITH f AS MATERIALIZED (
+    SELECT sjb_build(array_agg(key), 50000, 3) AS small_filter,
+           sjb_build_auto(array_agg(key), 1e6, 1, 32, 1000, 158.19) AS auto_filter
+    FROM random_keys
+)
+SELECT count(*) AS keys,
+       count(*) FILTER (WHERE NOT sjb_contains(f.small_filter, r.key)) AS false_negatives_small,
+       count(*) FILTER (WHERE NOT sjb_contains(f.auto_filter, r.key)) AS false_negatives_auto,
+       (SELECT sjb_info(auto_filter) FROM f) AS auto_filter
+FROM random_keys r, f;

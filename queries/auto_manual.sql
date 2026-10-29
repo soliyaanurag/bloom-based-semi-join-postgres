@@ -1,16 +1,17 @@
 --
 -- auto_manual.sql
 --
--- The join with an ADAPTIVE filter (Batch 5). Site A collects the
--- customer_ids of the kept orders, and sjb_build_auto picks the filter
--- mode (BLOOM, EXACT or PASS) and the Bloom size at RUNTIME, from the
--- exact number of distinct keys, the catalog statistics of customers and
--- the calibrated speed of site B. Site B keeps the rows that pass
--- sjb_contains; the normal join at A removes any Bloom false positives.
+-- The join with an AUTOMATICALLY SIZED Bloom filter. Site A collects the
+-- customer_ids of the kept orders, and sjb_build_auto sizes the Bloom
+-- filter at RUNTIME, from the exact number of distinct keys and the
+-- catalog statistics of customers (sizing rules a-d, see
+-- sjbloom/costmodel.c). Site B keeps the rows that pass sjb_contains; the
+-- normal join at A removes the Bloom false positives.
 --
 -- For n = 100, 10000 and 150000 it prints sjb_info of the filter that was
 -- built and the two correctness counts (both must be 0). For n = 10000 it
--- also shows the plan, with sjb_contains in the Remote SQL.
+-- also shows the plan, with sjb_contains in the Remote SQL and the Bloom
+-- lines of our EXPLAIN hook under the Foreign Scan.
 --
 -- Needs: sjbloom in both sites and setup/enable_sjbloom.sql.
 --
@@ -21,7 +22,9 @@
 -- Step 1: settings. network_mbit = network speed (default 1000 Mbit/s).
 -- t_check_ns = site B's time to scan and check one row; the default is
 -- the value bench/calibrate.py measured on our machine
--- (results/calibration.json, "suggested"). Rerun it on yours.
+-- (results/calibration.json, "suggested"). Rerun it on yours. (These two
+-- only change the predicted time, not the filter: its size depends only
+-- on bytes.)
 \if :{?network_mbit}
 \else
     \set network_mbit 1000
@@ -40,7 +43,7 @@
 -- (sjb_build_auto removes NULLs and repeats itself, so no DISTINCT is
 -- needed), and sjb_build_auto builds the filter. It is sent to site B as
 -- parameter $1: look for "sjb_contains($1::bytea, customer_id)" in the
--- "Remote SQL:" line.
+-- "Remote SQL:" line, and for the "Bloom ..." lines below it.
 \set n 10000
 EXPLAIN (ANALYZE, VERBOSE, COSTS OFF)
 SELECT o.order_id, c.name

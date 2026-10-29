@@ -34,7 +34,9 @@
 --   k    = 0.693 * b hash positions per key (at least 1); this k gives
 --          the lowest false-positive rate for b bits per key
 -- Its result is sent to site B as parameter $1. Look for
--- "sjb_contains($1::bytea, customer_id)" in the "Remote SQL:" line.
+-- "sjb_contains($1::bytea, customer_id)" in the "Remote SQL:" line, and
+-- for the "Bloom ..." lines that sjbloom's EXPLAIN hook adds under the
+-- Foreign Scan (keys, m, k, predicted false-positive rate, bytes sent).
 EXPLAIN (ANALYZE, VERBOSE)
 SELECT o.order_id, c.name
 FROM orders o

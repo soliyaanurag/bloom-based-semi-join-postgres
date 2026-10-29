@@ -1,1 +1,1 @@
-<!-- queries/: the SQL test queries (baseline join and filtered join) and the EXCEPT ALL correctness checks. -->
+<!-- queries/: SQL demos and checks: the baseline join, the hand-written Bloom semi-join, correctness checks (EXCEPT ALL), false-positive experiments, the cost model demo and the EXPLAIN demo. -->
