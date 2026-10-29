@@ -1,0 +1,4 @@
+# sjbloom: Bloom filter semi-joins for postgres_fdw
+default_version = '1.0'
+module_pathname = '$libdir/sjbloom'
+relocatable = true

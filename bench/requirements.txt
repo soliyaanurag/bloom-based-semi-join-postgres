@@ -1,0 +1,4 @@
+# Python packages for the bench/ scripts (install into .venv, see docs/WALKTHROUGH.md).
+# psycopg 3 with its bundled libpq ("binary"), and matplotlib for the charts.
+psycopg[binary]
+matplotlib
