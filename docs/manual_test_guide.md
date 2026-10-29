@@ -105,7 +105,7 @@ Run it in a new psql session. Expected: for n = 1000, 10000 and 150000 a plain p
  150000 |        139294 |     139294 | t       | m=1703339 bits, k=8, 12.23 bits/key, 48.03% bits set  |      141770 |        2476 |       2431.5
 ```
 
-(one row per n, also with `plain_ms` and `bloom_ms`: the Bloom query is about 3× to 10× faster). At the end:
+(one row per n, also with `plain_ms` and `bloom_ms`: on our machine 1,279 / 142, 1,329 / 174 and 1,410 / 481 ms, so the Bloom query is about 3× to 9× faster). At the end:
 
 ```
   filter_case   |   filter_kind   | bloom_keys |                   bloom_size                   | fp_rate | bytes_sent | rows_from_b | lines_present

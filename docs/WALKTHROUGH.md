@@ -91,7 +91,7 @@ Nothing in the setup changes postgres_fdw's behaviour: no library is preloaded, 
 `EXPLAIN (ANALYZE, VERBOSE)` runs the query and prints the plan as a tree. Each `->` is a child node that feeds rows to the node above it.
 
 ```
-Foreign Scan on public.customers c  (cost=100.00..237257.00 rows=1000000 width=15) (actual time=0.517..1624.927 rows=1000000.00 loops=1)
+Foreign Scan on public.customers c  (cost=100.00..237257.00 rows=1000000 width=15) (actual time=0.916..1212.663 rows=1000000.00 loops=1)
                                      └──────── planner's GUESS ───────────────┘  └──────────── what REALLY happened ─────────────────┘
 ```
 
@@ -106,10 +106,10 @@ Foreign Scan on public.customers c  (cost=100.00..237257.00 rows=1000000 width=1
 `queries/baseline.sql` (n = 1000):
 
 ```
- Hash Join  (actual time=2.029..1773.941 rows=1000.00 loops=1)
-   ->  Foreign Scan on public.customers c  (actual time=0.517..1624.927 rows=1000000.00 loops=1)
+ Hash Join  (actual time=2.863..1320.243 rows=1000.00 loops=1)
+   ->  Foreign Scan on public.customers c  (actual time=0.916..1212.663 rows=1000000.00 loops=1)
          Remote SQL: SELECT customer_id, name FROM public.customers
- Execution Time: 1774.539 ms
+ Execution Time: 1320.743 ms
 ```
 
 The Remote SQL has **no WHERE clause**, so site B sends all **1,000,000** rows to answer a query with 1000 result rows. postgres_fdw cannot push the join condition down, because the other side of the join (orders) lives at site A.
@@ -457,7 +457,7 @@ The model is within 10% of the measured Foreign Scan time, and the predicted row
 `sjbloom/sjb_explain.c` adds five lines under the Foreign Scan of a Bloom semi-join (`queries/explain_demo.sql`, n = 10,000):
 
 ```
-   ->  Foreign Scan on public.customers c (actual time=10.700..221.517 rows=10140.00 loops=1)
+   ->  Foreign Scan on public.customers c (actual time=7.604..169.577 rows=10140.00 loops=1)
          Remote SQL: SELECT customer_id, name FROM public.customers WHERE (public.sjb_contains($1::bytea, customer_id))
          Semijoin Filter: Bloom (sjbloom)
          Bloom Keys: 9955
@@ -498,9 +498,9 @@ Then it checks the lines for the two smallest filters (rule a with `ARRAY(SELECT
 
 | n | keys = Bloom Keys | m, k | measured FP | predicted FP | plain (ms) | Bloom (ms) |
 |---:|---|---|---:|---:|---:|---:|
-| 1,000 | 999 = 999 | 22,792, 16 | 20 | 17.3 | 1,838 | 177 |
-| 10,000 | 9,955 = 9,955 | 179,299, 12 | 185 | 173.5 | 1,972 | 232 |
-| 150,000 | 139,294 = 139,294 | 1,703,339, 8 | 2,476 | 2,431.5 | 2,157 | 679 |
+| 1,000 | 999 = 999 | 22,792, 16 | 20 | 17.3 | 1,279 | 142 |
+| 10,000 | 9,955 = 9,955 | 179,299, 12 | 185 | 173.5 | 1,329 | 174 |
+| 150,000 | 139,294 = 139,294 | 1,703,339, 8 | 2,476 | 2,431.5 | 1,410 | 481 |
 
 ## 8. Benchmarks
 
