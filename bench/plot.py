@@ -200,7 +200,7 @@ def plot_b_sweep(sweep_rows, width):
     predicted_b = float(width_rows[0]["predicted_b"])
     n = width_rows[0]["n"]
 
-    figure, axes = new_chart(f"Total network bytes vs bits per key b (n = {n}), "
+    figure, axes = new_chart(f"Estimated bytes on the wire vs bits per key b (n = {n}), "
                              f"{WIDTH_TITLES[width]}",
                              "b = Bloom filter bits per distinct key",
                              "bytes on the wire (estimated), A->B + B->A, log scale")
@@ -270,7 +270,7 @@ def main():
     saved = []
     for width in WIDTHS:
         saved.append(plot_versus_n(latest, width, "total_bytes",
-                                   "Total network bytes vs n",
+                                   "Estimated bytes on the wire vs n",
                                    "bytes on the wire (estimated), A->B + B->A, log scale",
                                    "total_bytes_vs_n", True))
         saved.append(plot_versus_n(latest, width, "time_ms",

@@ -1,0 +1,242 @@
+{
+  "measured_at": "2026-10-29 11:22:46",
+  "customers_rows": 1000000,
+  "runs_per_measurement": 5,
+  "check_filter": {
+    "num_keys": 10000,
+    "bits_per_key": 16
+  },
+  "fetch_size": 100,
+  "no_parallel": {
+    "max_parallel_workers_per_gather": "0",
+    "check": {
+      "median_ms": 145.199,
+      "t_check_ns": 145.2,
+      "plan": "Seq Scan"
+    },
+    "count_star": {
+      "median_ms": 134.393,
+      "plan": "Aggregate > Index Only Scan"
+    }
+  },
+  "with_parallel": {
+    "max_parallel_workers_per_gather": "2",
+    "check": {
+      "median_ms": 144.714,
+      "t_check_ns": 144.71,
+      "plan": "Seq Scan"
+    },
+    "count_star": {
+      "median_ms": 60.571,
+      "plan": "Aggregate > Gather > Aggregate > Index Only Scan (2 workers)"
+    }
+  },
+  "fdw": {
+    "messages_and_rows": {
+      "points": [
+        {
+          "fetch_size": 100,
+          "R": 1000,
+          "rows": 1000,
+          "messages": 11,
+          "fdw_ms": 1.932,
+          "local_ms": 0.254,
+          "extra_ms": 1.678,
+          "local_plan": "Index Scan",
+          "fit_ms": 1.234
+        },
+        {
+          "fetch_size": 100,
+          "R": 10000,
+          "rows": 10000,
+          "messages": 101,
+          "fdw_ms": 15.239,
+          "local_ms": 2.093,
+          "extra_ms": 13.146,
+          "local_plan": "Index Scan",
+          "fit_ms": 11.794
+        },
+        {
+          "fetch_size": 100,
+          "R": 100000,
+          "rows": 100000,
+          "messages": 1001,
+          "fdw_ms": 141.728,
+          "local_ms": 22.248,
+          "extra_ms": 119.48,
+          "local_plan": "Index Scan",
+          "fit_ms": 117.387
+        },
+        {
+          "fetch_size": 100,
+          "R": 300000,
+          "rows": 300000,
+          "messages": 3001,
+          "fdw_ms": 423.549,
+          "local_ms": 73.789,
+          "extra_ms": 349.76,
+          "local_plan": "Index Scan",
+          "fit_ms": 352.039
+        },
+        {
+          "fetch_size": 100,
+          "R": 1000000,
+          "rows": 1000000,
+          "messages": 10001,
+          "fdw_ms": 1357.796,
+          "local_ms": 186.799,
+          "extra_ms": 1170.997,
+          "local_plan": "Seq Scan",
+          "fit_ms": 1173.32
+        },
+        {
+          "fetch_size": 1000,
+          "R": 1000,
+          "rows": 1000,
+          "messages": 2,
+          "fdw_ms": 0.959,
+          "local_ms": 0.254,
+          "extra_ms": 0.705,
+          "local_plan": "Index Scan",
+          "fit_ms": 0.684
+        },
+        {
+          "fetch_size": 1000,
+          "R": 10000,
+          "rows": 10000,
+          "messages": 11,
+          "fdw_ms": 7.993,
+          "local_ms": 2.093,
+          "extra_ms": 5.9,
+          "local_plan": "Index Scan",
+          "fit_ms": 6.29
+        },
+        {
+          "fetch_size": 1000,
+          "R": 100000,
+          "rows": 100000,
+          "messages": 101,
+          "fdw_ms": 82.976,
+          "local_ms": 22.248,
+          "extra_ms": 60.728,
+          "local_plan": "Index Scan",
+          "fit_ms": 62.353
+        },
+        {
+          "fetch_size": 1000,
+          "R": 300000,
+          "rows": 300000,
+          "messages": 301,
+          "fdw_ms": 257.384,
+          "local_ms": 73.789,
+          "extra_ms": 183.595,
+          "local_plan": "Index Scan",
+          "fit_ms": 186.936
+        },
+        {
+          "fetch_size": 1000,
+          "R": 1000000,
+          "rows": 1000000,
+          "messages": 1001,
+          "fdw_ms": 841.586,
+          "local_ms": 186.799,
+          "extra_ms": 654.787,
+          "local_plan": "Seq Scan",
+          "fit_ms": 622.978
+        },
+        {
+          "fetch_size": 10000,
+          "R": 1000,
+          "rows": 1000,
+          "messages": 2,
+          "fdw_ms": 0.931,
+          "local_ms": 0.254,
+          "extra_ms": 0.677,
+          "local_plan": "Index Scan",
+          "fit_ms": 0.684
+        },
+        {
+          "fetch_size": 10000,
+          "R": 10000,
+          "rows": 10000,
+          "messages": 2,
+          "fdw_ms": 7.312,
+          "local_ms": 2.093,
+          "extra_ms": 5.219,
+          "local_plan": "Index Scan",
+          "fit_ms": 5.74
+        },
+        {
+          "fetch_size": 10000,
+          "R": 100000,
+          "rows": 100000,
+          "messages": 11,
+          "fdw_ms": 75.852,
+          "local_ms": 22.248,
+          "extra_ms": 53.604,
+          "local_plan": "Index Scan",
+          "fit_ms": 56.849
+        },
+        {
+          "fetch_size": 10000,
+          "R": 300000,
+          "rows": 300000,
+          "messages": 31,
+          "fdw_ms": 228.206,
+          "local_ms": 73.789,
+          "extra_ms": 154.417,
+          "local_plan": "Index Scan",
+          "fit_ms": 170.426
+        },
+        {
+          "fetch_size": 10000,
+          "R": 1000000,
+          "rows": 1000000,
+          "messages": 101,
+          "fdw_ms": 732.018,
+          "local_ms": 186.799,
+          "extra_ms": 545.219,
+          "local_plan": "Seq Scan",
+          "fit_ms": 567.943
+        }
+      ],
+      "per_message_ms": 0.06115,
+      "per_row_us": 0.56177,
+      "r_squared": 0.99883
+    },
+    "build": {
+      "points": [
+        {
+          "n": 1000,
+          "median_ms": 0.251,
+          "filter": "mode=bloom nkeys=1000 m=22933 k=16 bits_set=50.24% bytes=2891"
+        },
+        {
+          "n": 10000,
+          "median_ms": 2.436,
+          "filter": "mode=bloom nkeys=10000 m=181213 k=13 bits_set=51.09% bytes=22676"
+        },
+        {
+          "n": 50000,
+          "median_ms": 11.433,
+          "filter": "mode=bloom nkeys=50000 m=734295 k=10 bits_set=49.38% bytes=91811"
+        },
+        {
+          "n": 150000,
+          "median_ms": 36.355,
+          "filter": "mode=bloom nkeys=150000 m=1825204 k=8 bits_set=48.20% bytes=228175"
+        }
+      ],
+      "intercept_ms": -0.17,
+      "t_build_us": 0.2424,
+      "r_squared": 0.99956
+    }
+  },
+  "suggested": {
+    "t_check_ns": 145.2,
+    "per_message_ms": 0.06115,
+    "per_row_us": 0.56177,
+    "t_build_us": 0.2424,
+    "fetch_size": 100
+  }
+}

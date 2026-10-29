@@ -1,0 +1,16 @@
+bench/validate_model.py, 2026-10-29 (best-performance mode, constants from docs/midsem/calibration.json)
+constants: t_check_ns = 145.2, per_message_ms = 0.06115, per_row_us = 0.56177, t_build_us = 0.2424, fetch_size = 100
+network_mbit = 1000, s_rows = 1,000,000, row width: text 16.78 + 7 + 4*2 = 31.78 bytes on the wire
+
+     n | n_keys | rule |       m |  k | predicted_ms | covered_ms | ratio | initplan_ms | end_to_end_ms | e2e_ratio | pred_rows | remote_rows
+-------+--------+------+---------+----+--------------+------------+-------+-------------+---------------+-----------+-----------+------------
+   100 |    100 |    b |   2,773 | 19 |       145.50 |     142.88 |  0.98 |        0.07 |        143.59 |      0.99 |       102 |         109
+ 1,000 |    999 |    b |  22,912 | 16 |       147.05 |     135.78 |  0.92 |        0.61 |        137.22 |      0.93 |     1,015 |       1,024
+10,000 |  9,955 |    b | 180,492 | 13 |       162.53 |     162.98 |  1.00 |        5.14 |        171.64 |      1.06 |    10,119 |      10,099
+50,000 | 48,738 |    b | 718,489 | 10 |       229.27 |     252.27 |  1.10 |       24.81 |        297.45 |      1.30 |    49,537 |      49,554
+
+predicted parts (ms):
+  n=100    network 0.03, messages 0.18, rows 0.06, work A 0.02, work B 145.20
+  n=1000   network 0.30, messages 0.73, rows 0.57, work A 0.24, work B 145.20
+  n=10000  network 2.93, messages 6.30, rows 5.68, work A 2.41, work B 145.20
+  n=50000  network 14.03, messages 30.39, rows 27.83, work A 11.81, work B 145.20
