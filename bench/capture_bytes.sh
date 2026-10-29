@@ -46,14 +46,13 @@ Run these commands yourself (this script does not run them).
    bytes_a_to_b is also the "Bloom Bytes Sent" line that sjbloom adds
    under the Foreign Scan in the EXPLAIN output of step 2.
 
-Expect the capture to be LARGER than our estimate. Our estimate counts
-only the filter text and the row values. The capture also contains:
+Expect the capture to be LARGER than our estimate. Our estimate counts the
+filter text and, for every returned row, the values as text plus the
+DataRow message overhead (7 bytes per row + 4 bytes per column). The
+capture also contains:
   - TCP/IP headers of every packet, plus the login handshake of the new
     postgres_fdw connection,
-  - PostgreSQL protocol overhead: each returned row is a DataRow message
-    with a 7-byte header plus a 4-byte length per column (15 bytes per row
-    for 2 columns), and postgres_fdw fetches rows in batches of 100 with
-    a cursor (DECLARE / FETCH 100 / CLOSE), so there are extra round trips.
-With narrow rows (about 17 bytes) that overhead is roughly as big as the
-data itself, so a factor of about 2 is normal.
+  - the other protocol messages: postgres_fdw fetches rows in batches of
+    100 with a cursor (DECLARE / FETCH 100 / CLOSE), so there are extra
+    round trips, each with its own small messages.
 EOF

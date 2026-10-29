@@ -3,7 +3,7 @@ plot.py: draws the mid-sem charts as PNG files in results/.
 
 From results/results.csv (written by run_experiments.py), one chart per
 width variant (narrow, wide) for each of:
-  total_bytes_vs_n_<width>.png   network bytes vs n (log scale)
+  total_bytes_vs_n_<width>.png   estimated bytes on the wire vs n (log scale)
   time_ms_vs_n_<width>.png       query time vs n
   remote_rows_vs_n_<width>.png   rows site B sends back vs n
 From results/b_sweep.csv (written by b_sweep.py), per width variant:
@@ -203,7 +203,7 @@ def plot_b_sweep(sweep_rows, width):
     figure, axes = new_chart(f"Total network bytes vs bits per key b (n = {n}), "
                              f"{WIDTH_TITLES[width]}",
                              "b = Bloom filter bits per distinct key",
-                             "total bytes A->B + B->A (log scale)")
+                             "bytes on the wire (estimated), A->B + B->A, log scale")
     axes.plot(b_values, measured, label="measured", color=STRATEGY_COLORS["bloom_auto"],
               marker="D", markersize=7, linewidth=2)
     axes.plot(b_values, predicted, label="cost model prediction", color=INK_COLOR,
@@ -270,7 +270,8 @@ def main():
     saved = []
     for width in WIDTHS:
         saved.append(plot_versus_n(latest, width, "total_bytes",
-                                   "Total network bytes vs n", "total bytes A->B + B->A (log scale)",
+                                   "Total network bytes vs n",
+                                   "bytes on the wire (estimated), A->B + B->A, log scale",
                                    "total_bytes_vs_n", True))
         saved.append(plot_versus_n(latest, width, "time_ms",
                                    "Query time vs n", "time in ms, median of 3 runs (log scale)",

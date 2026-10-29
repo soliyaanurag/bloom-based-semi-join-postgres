@@ -4,12 +4,15 @@
 -- Estimates how many bytes the Bloom query (bloom_manual.sql) moves over
 -- the network, for one value of n and b:
 --   bytes A->B  the filter, sent as hex text (octet_length(filter::text))
---   bytes B->A  (rows site B sends back) * (average text width of a row)
+--   bytes B->A  (rows site B sends back) * (wire width of a row)
 -- and compares it with the baseline, which fetches every customer.
 --
 -- Remember: postgres_fdw sends parameters and rows as TEXT, so we measure
--- text sizes, not the binary sizes. (We ignore small per-row and
--- per-message protocol overheads.)
+-- text sizes, not the binary sizes. Every returned row is a DataRow
+-- message: 7 bytes per row + 4 bytes per column + the values as text, so
+-- the wire width of a row is (average text width) + 7 + 4 * 2 for our two
+-- columns. This is the same row_width the cost model and sjb_build_auto
+-- use. (TCP/IP headers and the other protocol messages are not counted.)
 --
 -- Run in site_a:  psql -d site_a -v n=10000 -v b=10 -f queries/byte_estimate.sql
 --
@@ -38,11 +41,12 @@ bloom AS MATERIALIZED (
     FROM orders
     WHERE order_id <= :n
 ),
--- 3b: average text width of one returned row (customer_id and name are
--- the only columns the join needs, so the only ones site B sends).
--- postgres_fdw runs this aggregate at site B and returns one number.
+-- 3b: average wire width of one returned row (customer_id and name are
+-- the only columns the join needs, so the only ones site B sends): their
+-- text + 7 + 4 * 2 bytes of DataRow overhead. postgres_fdw runs this
+-- aggregate at site B and returns one number.
 row_width AS MATERIALIZED (
-    SELECT avg(octet_length(customer_id::text) + octet_length(name::text)) AS avg_width,
+    SELECT avg(octet_length(customer_id::text) + octet_length(name::text)) + 7 + 4 * 2 AS avg_width,
            count(*) AS all_rows
     FROM customers
 ),

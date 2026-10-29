@@ -5,14 +5,13 @@ total network bytes, and does the cost model pick a good b?
 For n = 10000 and each b in B_VALUES, for both width variants, it runs the
 Bloom query once under EXPLAIN ANALYZE and records:
   bytes_a_to_b  the filter as hex text
-  bytes_b_to_a  remote_rows * measured average row width (this variant)
-  total_bytes   the sum
+  bytes_b_to_a  remote_rows * wire row width (this variant)
+  total_bytes   the sum: estimated bytes on the wire
 It also prints the b* predicted by sjb_best_bits for each variant and the
 total bytes the cost model predicts for each b, so plot.py can draw both.
-Both use the same byte count as the measurement: the TEXT width of a row
-(the values only). sjb_build_auto (bloom_auto in run_experiments.py) uses
-the wire width instead, which adds PostgreSQL's DataRow overhead (7 bytes
-per row + 4 per column), so its b is about 1 to 1.5 bits larger.
+All of them use the same wire row width as sjb_build_auto (the value text
++ 7 bytes per row + 4 per column, common.wire_row_width), so the b* line
+is the b that bloom_auto uses for this n.
 
 Results go to results/b_sweep.csv (overwritten on every run).
 
@@ -42,7 +41,7 @@ CSV_COLUMNS = ["width", "n", "b", "remote_rows", "bytes_a_to_b", "bytes_b_to_a",
 
 def model_total_bytes(n_distinct, s_rows, row_width, b):
     """
-    Total bytes predicted by cost model version 1 for b bits per key. This
+    Total bytes predicted by the cost model for b bits per key. This
     is the same formula that sjb_best_bits minimises (see
     sjbloom/sjbloom--1.0.sql):
         filter (A to B)            n * b / 8 * 2            (hex text)
@@ -67,7 +66,7 @@ def best_bits(conn, n_distinct, s_rows, row_width):
       s_rows     = rows of customers (reltuples of the foreign table)
       matches    = n_distinct, because every customer_id in orders exists
                    at site B, so each distinct key matches exactly one row
-      row_width  = measured text width of a returned row for this variant
+      row_width  = wire width of a returned row for this variant
       2          = the filter travels as hex text (2 bytes per byte)
 
     Input:  conn, a connection to site_a; n_distinct; s_rows; row_width.
@@ -86,9 +85,11 @@ def main():
 
     all_rows = []
     for width in WIDTHS:
-        row_width = common.avg_row_width(width)
+        text_width = common.avg_row_width(width)
+        row_width = common.wire_row_width(text_width, width)
         predicted_b = best_bits(conn, n_distinct, s_rows, row_width)
-        print(f"{width}: row width {row_width:.2f} bytes, predicted b* = {predicted_b}")
+        print(f"{width}: row width {text_width:.2f} bytes of text, {row_width:.2f} bytes "
+              f"on the wire, predicted b* = {predicted_b}")
 
         for b in B_VALUES:
             sql_text, bytes_sql = strategies.bloom_manual(N, b, width)

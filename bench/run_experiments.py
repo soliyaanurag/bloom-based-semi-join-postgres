@@ -9,9 +9,13 @@ For each width variant (narrow, wide), each n in N_VALUES and each strategy
      number of rows site B sent back (remote_rows),
   3. computes the network bytes:
        bytes_a_to_b = the filter as hex text (query from strategies.py)
-       bytes_b_to_a = remote_rows * measured average text width of a row
-                      (this variant): the values only, without protocol
-                      overhead
+       bytes_b_to_a = remote_rows * wire row width of this variant: the
+                      measured average text width of the values + 7 bytes
+                      per row + 4 per column (PostgreSQL's DataRow
+                      message), the same row_width the cost model and
+                      sjb_build_auto use (common.wire_row_width)
+     These are estimated bytes on the wire (TCP/IP headers and the other
+     protocol messages are not counted).
   4. checks that the result equals the baseline (EXCEPT ALL both ways).
 If the join is a Nested Loop with a Join Filter, the same case is run again
 with SET enable_nestloop = off, and both rows are recorded (column
@@ -87,7 +91,7 @@ def measure_case(conn, strategy_name, width, n, b, sql_text, bytes_sql,
     Input:  conn, a connection to site_a; strategy_name, width, n, b (bits
             per key; None for the baseline); sql_text and bytes_sql from
             strategies.py; baseline_sql for the correctness check;
-            row_width, the measured row width of this variant;
+            row_width, the wire row width of this variant;
             nestloop_off, True when enable_nestloop is off for this run.
     Output: (row dict with the CSV_COLUMNS keys, the median plan).
     """
@@ -156,7 +160,7 @@ def main():
 
     # Measure the row width of each variant once, in site_b. The text width
     # counts the bytes of the values; the wire width adds PostgreSQL's
-    # DataRow overhead and is what sjb_build_auto needs.
+    # DataRow overhead. Bytes and sjb_build_auto both use the wire width.
     s_rows = strategies.foreign_table_rows(conn)
     row_widths = {}
     wire_widths = {}
@@ -174,7 +178,7 @@ def main():
 
             for name, b, sql_text, bytes_sql in cases:
                 row, plan = measure_case(conn, name, width, n, b, sql_text, bytes_sql,
-                                         baseline_sql, row_widths[width], False)
+                                         baseline_sql, wire_widths[width], False)
                 all_rows.append(row)
                 print_progress(row, plan)
 
@@ -183,7 +187,7 @@ def main():
                 if common.is_nestloop_with_join_filter(plan):
                     conn.execute("SET enable_nestloop = off")
                     row, plan = measure_case(conn, name, width, n, b, sql_text, bytes_sql,
-                                             baseline_sql, row_widths[width], True)
+                                             baseline_sql, wire_widths[width], True)
                     conn.execute("RESET enable_nestloop")
                     all_rows.append(row)
                     print_progress(row, plan)
