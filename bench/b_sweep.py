@@ -9,6 +9,10 @@ Bloom query once under EXPLAIN ANALYZE and records:
   total_bytes   the sum
 It also prints the b* predicted by sjb_best_bits for each variant and the
 total bytes the cost model predicts for each b, so plot.py can draw both.
+Both use the same byte count as the measurement: the TEXT width of a row
+(the values only). sjb_build_auto (bloom_auto in run_experiments.py) uses
+the wire width instead, which adds PostgreSQL's DataRow overhead (7 bytes
+per row + 4 per column), so its b is about 1 to 1.5 bits larger.
 
 Results go to results/b_sweep.csv (overwritten on every run).
 
@@ -55,6 +59,25 @@ def model_total_bytes(n_distinct, s_rows, row_width, b):
     return filter_bytes + match_bytes + false_positive_bytes
 
 
+def best_bits(conn, n_distinct, s_rows, row_width):
+    """
+    The b* of sjb_best_bits for this sweep:
+        sjb_best_bits(n_distinct, s_rows, n_distinct, row_width, 2)
+      n          = number of distinct keys in the filter
+      s_rows     = rows of customers (reltuples of the foreign table)
+      matches    = n_distinct, because every customer_id in orders exists
+                   at site B, so each distinct key matches exactly one row
+      row_width  = measured text width of a returned row for this variant
+      2          = the filter travels as hex text (2 bytes per byte)
+
+    Input:  conn, a connection to site_a; n_distinct; s_rows; row_width.
+    Output: b*, rounded to 2 decimals.
+    """
+    row = conn.execute("SELECT sjb_best_bits(%s, %s, %s, %s, 2)",
+                       (n_distinct, s_rows, n_distinct, row_width)).fetchone()
+    return round(row[0], 2)
+
+
 def main():
     conn = common.connect("site_a")
     n_distinct = strategies.distinct_keys(conn, N)
@@ -64,7 +87,7 @@ def main():
     all_rows = []
     for width in WIDTHS:
         row_width = common.avg_row_width(width)
-        predicted_b = strategies.dynamic_bits(conn, N, row_width)
+        predicted_b = best_bits(conn, n_distinct, s_rows, row_width)
         print(f"{width}: row width {row_width:.2f} bytes, predicted b* = {predicted_b}")
 
         for b in B_VALUES:

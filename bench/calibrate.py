@@ -8,16 +8,13 @@ Valduriez:
 
 and needs these machine-dependent numbers:
 
-  t_check_ns      filter path: ns site B needs to scan ONE row of customers
-                  and run sjb_contains on it                  (Batch 5)
-  per_message_ms  one message round trip between A and B      (Batch 5b)
+  t_check_ns      ns site B needs to scan ONE row of customers and run
+                  sjb_contains on it
+  per_message_ms  one message round trip between A and B
   per_row_us      CPU per returned row: B turns it into text, A turns the
-                  text back into values                       (Batch 5b)
-  t_lookup_us     index path, per key, END TO END through postgres_fdw:
-                  key list to text, parsing and planning at B, the index
-                  lookup; messages and returned rows taken out (Batch 5b)
-  t_build_us      filter path, site A's time per key to build the filter
-                  with sjb_build_auto                         (Batch 5b)
+                  text back into values
+  t_build_us      site A's time per key to build the filter with
+                  sjb_build_auto
 
 Every constant is measured on its OWN calibration workload: random
 existing customer_ids from a fixed seed, or "customer_id <= R" ranges.
@@ -26,24 +23,18 @@ validate_model.py can test the model on data it was not fitted to.
 
 Parallel workers: postgres_fdw runs the remote query through a CURSOR, and
 PostgreSQL never uses parallel workers for a cursor. So every measurement
-uses SET max_parallel_workers_per_gather = 0. For comparison, the site B
-measurements (t_check_ns and the direct index lookup) are taken a second
-time with the server's default setting, and both are printed and saved.
+uses SET max_parallel_workers_per_gather = 0. For comparison, t_check_ns
+is measured a second time with the server's default setting, and both are
+printed and saved.
 
 Method (each point: one untimed warm-up run, then the median of 5):
   t_check_ns:  a Bloom filter of 10,000 random existing keys (b = 16),
                then  SELECT customer_id, name FROM customers
                      WHERE sjb_contains(filter, customer_id)
                in site_b; median execution time / rows of customers.
-               The same is done with an EXACT and a PASS filter of the same
-               keys, to see whether one constant is enough for all modes.
-               For reference only, the Bloom scan is also timed as
+               For reference only, the scan is also timed as
                SELECT count(*) ...: that form CAN use parallel workers,
-               while the row-returning form above does not (see
-               docs/WALKTHROUGH.md, Batch 5).
-  direct lookup (reference only): customer_id = ANY(keys) run directly in
-               site_b for n = 1000 .. 20000; the slope of the fitted line.
-               This was Batch 5's t_lookup_us.
+               while the row-returning form above does not.
   per_message_ms and per_row_us:
                SELECT customer_id, name FROM customers WHERE customer_id <= R
                for R = 1000 .. 1,000,000:
@@ -60,16 +51,6 @@ Method (each point: one untimed warm-up run, then the median of 5):
                constants could not be told apart.
                The model itself uses the REAL fetch_size of
                public.customers (100 unless set in the options).
-  t_lookup_us: through postgres_fdw at site_a, for n = 1000 .. 50000 random
-               existing keys:
-                 SELECT customer_id, name FROM customers
-                 WHERE customer_id = ANY ((SELECT keys)::int4[])
-               (the sub-SELECT makes postgres_fdw send the keys as a
-               parameter, like the benchmark's exact_keys; the outer cast
-               is needed, see CLAUDE.md). From the Foreign
-               Scan time we subtract messages * per_message_ms and
-               n * per_row_us, then fit a straight line; t_lookup_us is
-               its slope.
   t_build_us:  at site_a, SELECT sjb_build_auto((SELECT keys), ...) for
                n = 1000 .. 150000 random existing keys; a straight line
                through the execution times; t_build_us is its slope.
@@ -97,20 +78,11 @@ import common
 RUNS = 5
 CHECK_NUM_KEYS = 10000
 CHECK_BITS_PER_KEY = 16
-LOOKUP_N_VALUES = [1000, 5000, 10000, 20000]
-# Batch 5b workloads.
 RANGE_R_VALUES = [1000, 10000, 100000, 300000, 1000000]
 CALIBRATION_FETCH_SIZES = [100, 1000, 10000]
-FDW_LOOKUP_N_VALUES = [1000, 5000, 20000, 50000]
 BUILD_N_VALUES = [1000, 10000, 50000, 150000]
-# The cost model's inputs used while timing sjb_build_auto (they only
-# decide which mode is built; see measure_build).
-BUILD_NETWORK_MBIT = 1000
 # Seed for PostgreSQL's random(), so every run picks the same keys.
 RANDOM_SEED = 0.42
-
-# The filter modes, as stored in byte 1 of a filter (see sjb_filter.h).
-MODE_NUMBERS = {"bloom": 1, "exact": 2, "pass": 3}
 
 RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results")
 CALIBRATION_JSON = os.path.join(RESULTS_DIR, "calibration.json")
@@ -147,7 +119,7 @@ def random_keys(conn, n):
 
 def count_customers(conn):
     """
-    The exact number of rows of customers in site_b.
+    The true number of rows of customers in site_b.
 
     Input:  conn, a connection to site_b.
     Output: the count, as an int.
@@ -155,40 +127,18 @@ def count_customers(conn):
     return conn.execute("SELECT count(*) FROM customers").fetchone()[0]
 
 
-def build_filters(conn, keys):
+def build_check_filter(conn, keys):
     """
-    Build one filter of each mode from the same keys.
-
-      bloom: sjb_build with m = n * 16 bits and k = round(0.693 * 16) = 11
-      exact: sjb_build_auto with s_rows = 10^12. False positives would be so
-             expensive that Bloom needs more than 32 bits per key, so the
-             cost model picks EXACT.
-      pass:  sjb_build_auto with s_rows = number of keys: every row of S
-             matches, so the cost model picks PASS.
-    The message, row and build costs are passed as 0, so only bytes decide
-    and the modes do not depend on earlier calibration results.
+    Build the Bloom filter used to measure t_check_ns: sjb_build with
+    m = n * 16 bits and k = round(0.693 * 16) = 11.
 
     Input:  conn, a connection to site_b; keys, a list of ints.
-    Output: a dict {mode name: filter as Python bytes}. Stops with an error
-            if a filter does not have the expected mode.
+    Output: the filter as Python bytes.
     """
     m = math.ceil(len(keys) * CHECK_BITS_PER_KEY)
     k = round(0.693 * CHECK_BITS_PER_KEY)
-    filters = {
-        "bloom": conn.execute("SELECT sjb_build(%s::int4[], %s::int8, %s::int4)",
-                              (keys, m, k)).fetchone()[0],
-        "exact": conn.execute("SELECT sjb_build_auto(%s::int4[], 1e12, 1, 30, 1000, 0, "
-                              "1048576, 2, 0, 0, 0, 100)",
-                              (keys,)).fetchone()[0],
-        "pass": conn.execute("SELECT sjb_build_auto(%s::int4[], %s, 1, 30, 1000, 0, "
-                             "1048576, 2, 0, 0, 0, 100)",
-                             (keys, len(keys))).fetchone()[0],
-    }
-    for mode_name, filter_bytes in filters.items():
-        # Byte 0 is the version, byte 1 the mode.
-        if filter_bytes[1] != MODE_NUMBERS[mode_name]:
-            raise RuntimeError(f"expected a {mode_name} filter, got mode {filter_bytes[1]}")
-    return filters
+    return conn.execute("SELECT sjb_build(%s::int4[], %s::int8, %s::int4)",
+                        (keys, m, k)).fetchone()[0]
 
 
 def describe_plan(plan):
@@ -329,25 +279,22 @@ def line_r_squared(x_values, y_values, intercept, slope):
     return r_squared(y_values, predicted)
 
 
-def measure_check(conn, filters, num_customers):
+def measure_check(conn, filter_bytes, num_customers):
     """
-    t_check_ns for each filter mode: median time of the full scan with
-    sjb_contains, divided by the number of rows of customers.
+    t_check_ns: median time of the full scan with sjb_contains, divided by
+    the number of rows of customers.
 
-    Input:  conn, a connection to site_b; filters, from build_filters;
-            num_customers.
-    Output: a dict {mode name: {"median_ms", "t_check_ns", "plan"}}.
+    Input:  conn, a connection to site_b; filter_bytes, from
+            build_check_filter; num_customers.
+    Output: a dict {"median_ms", "t_check_ns", "plan"}.
     """
     sql = "SELECT customer_id, name FROM customers WHERE sjb_contains(%s::bytea, customer_id)"
-    results = {}
-    for mode_name, filter_bytes in filters.items():
-        median_ms, plan_text = median_execution_ms(conn, sql, (filter_bytes,))
-        results[mode_name] = {
-            "median_ms": round(median_ms, 3),
-            "t_check_ns": round(median_ms * 1e6 / num_customers, 2),
-            "plan": plan_text,
-        }
-    return results
+    median_ms, plan_text = median_execution_ms(conn, sql, (filter_bytes,))
+    return {
+        "median_ms": round(median_ms, 3),
+        "t_check_ns": round(median_ms * 1e6 / num_customers, 2),
+        "plan": plan_text,
+    }
 
 
 def measure_count_star(conn, filter_bytes):
@@ -364,34 +311,6 @@ def measure_count_star(conn, filter_bytes):
     sql = "SELECT count(*) FROM customers WHERE sjb_contains(%s::bytea, customer_id)"
     median_ms, plan_text = median_execution_ms(conn, sql, (filter_bytes,))
     return {"median_ms": round(median_ms, 3), "plan": plan_text}
-
-
-def measure_lookup(conn, keys_by_n):
-    """
-    Direct index lookup (reference only; Batch 5's t_lookup_us): time of
-    "customer_id = ANY(keys)" run directly in site_b for each n, and the
-    straight line through those points.
-
-    Input:  conn, a connection to site_b; keys_by_n, {n: list of n keys}.
-    Output: a dict with the points, the intercept (ms), the slope (ms per
-            key) and t_lookup_us (= slope * 1000).
-    """
-    sql = "SELECT customer_id, name FROM customers WHERE customer_id = ANY(%s::int4[])"
-    points = []
-    for n in LOOKUP_N_VALUES:
-        median_ms, plan_text = median_execution_ms(conn, sql, (keys_by_n[n],))
-        points.append({"n": n, "median_ms": round(median_ms, 3), "plan": plan_text})
-
-    n_values = [point["n"] for point in points]
-    times = [point["median_ms"] for point in points]
-    intercept_ms, slope_ms = fit_line(n_values, times)
-    return {
-        "points": points,
-        "intercept_ms": round(intercept_ms, 3),
-        "slope_ms_per_key": slope_ms,
-        "t_lookup_us": round(slope_ms * 1000, 4),
-        "r_squared": round(line_r_squared(n_values, times, intercept_ms, slope_ms), 4),
-    }
 
 
 def median_foreign_scan_ms(conn, sql, params):
@@ -484,7 +403,7 @@ def measure_messages_and_rows(conn_a, conn_b):
 
     Why several fetch sizes: with ONE fetch size, messages = 1 + R/100 is
     just R divided by 100, so the two terms grow together and least
-    squares cannot tell them apart (in Batch 5b this gave a negative
+    squares cannot tell them apart (in an earlier version this gave a negative
     per_message_ms on one run and a negative per_row_us on the next). With
     fetch_size 100, 1000 and 10000, the same R comes with very different
     numbers of messages, so both constants can be measured. The fetch size
@@ -539,52 +458,6 @@ def measure_messages_and_rows(conn_a, conn_b):
     }
 
 
-def measure_lookup_end_to_end(conn_a, keys_by_n, per_message_ms, per_row_us, fetch_size):
-    """
-    t_lookup_us through postgres_fdw: the index path's time per key.
-
-    For each n, the Foreign Scan time of
-    "customer_id = ANY ((SELECT keys)::int4[])"
-    minus the message cost and the returned-row cost (from
-    measure_messages_and_rows) leaves the per-key work: the key list as
-    text at A, parsing and planning at B, and the index lookups. A
-    straight line through those leftovers gives t_lookup_us (its slope).
-
-    Input:  conn_a; keys_by_n, {n: list of n existing keys};
-            per_message_ms, per_row_us, fetch_size.
-    Output: a dict with the points, the line, t_lookup_us and R^2.
-    """
-    sql = ("SELECT customer_id, name FROM customers "
-           "WHERE customer_id = ANY ((SELECT %s::int4[])::int4[])")
-    points = []
-    remote_sql_text = ""
-    for n in FDW_LOOKUP_N_VALUES:
-        fdw_ms, rows, remote_sql_text = median_foreign_scan_ms(conn_a, sql, (keys_by_n[n],))
-        messages = message_count(rows, fetch_size)
-        message_ms = messages * per_message_ms
-        row_ms = rows * per_row_us / 1000
-        points.append({
-            "n": n,
-            "rows": rows,
-            "fdw_ms": round(fdw_ms, 3),
-            "messages": messages,
-            "message_ms": round(message_ms, 3),
-            "row_ms": round(row_ms, 3),
-            "per_key_work_ms": round(fdw_ms - message_ms - row_ms, 3),
-        })
-
-    n_values = [point["n"] for point in points]
-    work = [point["per_key_work_ms"] for point in points]
-    intercept_ms, slope_ms = fit_line(n_values, work)
-    return {
-        "remote_sql": remote_sql_text,
-        "points": points,
-        "intercept_ms": round(intercept_ms, 3),
-        "t_lookup_us": round(slope_ms * 1000, 4),
-        "r_squared": round(line_r_squared(n_values, work, intercept_ms, slope_ms), 5),
-    }
-
-
 def measure_build(conn_a, keys_by_n, model_inputs):
     """
     t_build_us: site A's time per key for sjb_build_auto.
@@ -593,10 +466,10 @@ def measure_build(conn_a, keys_by_n, model_inputs):
     a call of an IMMUTABLE function with constant arguments and compute it
     once while PLANNING, and the execution time would be 0.
 
-    sjb_build_auto also needs the cost model's inputs, which decide which
-    mode it builds. We pass realistic ones (the customers statistics and
-    the constants measured above), so it builds the mode the real filter
-    path would build. The mode is printed for each n.
+    sjb_build_auto also needs the cost model's inputs, which decide the
+    filter's size. We pass realistic ones (the customers statistics and
+    the constants measured above), so it builds the filter the real query
+    would build. sjb_info of each filter is saved too.
 
     Input:  conn_a; keys_by_n; model_inputs, a dict with s_rows,
             row_width, t_check_ns, per_message_ms, per_row_us, fetch_size.
@@ -604,17 +477,16 @@ def measure_build(conn_a, keys_by_n, model_inputs):
     """
     arguments_sql = ("%s, 1, %s, %s, %s, 1048576, 2, %s, %s, 0, %s")
     sql = "SELECT sjb_build_auto((SELECT %s::int4[]), " + arguments_sql + ")"
-    mode_sql = "SELECT get_byte(sjb_build_auto(%s::int4[], " + arguments_sql + "), 1)"
-    mode_names = {1: "bloom", 2: "exact", 3: "pass"}
+    info_sql = "SELECT sjb_info(sjb_build_auto(%s::int4[], " + arguments_sql + "))"
     points = []
     for n in BUILD_N_VALUES:
         params = (keys_by_n[n], model_inputs["s_rows"], model_inputs["row_width"],
-                  BUILD_NETWORK_MBIT, model_inputs["t_check_ns"],
+                  common.NETWORK_MBIT, model_inputs["t_check_ns"],
                   model_inputs["per_message_ms"], model_inputs["per_row_us"],
                   model_inputs["fetch_size"])
         median_ms, unused_plan = median_execution_ms(conn_a, sql, params)
-        mode_number = conn_a.execute(mode_sql, params).fetchone()[0]
-        points.append({"n": n, "median_ms": round(median_ms, 3), "mode": mode_names[mode_number]})
+        filter_info = conn_a.execute(info_sql, params).fetchone()[0]
+        points.append({"n": n, "median_ms": round(median_ms, 3), "filter": filter_info})
 
     n_values = [point["n"] for point in points]
     times = [point["median_ms"] for point in points]
@@ -627,26 +499,26 @@ def measure_build(conn_a, keys_by_n, model_inputs):
     }
 
 
-def measure_all(conn, parallel_allowed, filters, keys_by_n, num_customers):
+def measure_all(conn, parallel_allowed, filter_bytes, num_customers):
     """
-    One full calibration (check + lookup) with parallel workers off or on.
+    The site B measurement (t_check_ns, and the count(*) reference) with
+    parallel workers off or on.
 
-    Input:  conn; parallel_allowed; filters; keys_by_n; num_customers.
+    Input:  conn; parallel_allowed; filter_bytes; num_customers.
     Output: a dict with the setting used and both measurements.
     """
     setting = set_parallel(conn, parallel_allowed)
     print(f"Measuring with max_parallel_workers_per_gather = {setting} ...")
     return {
         "max_parallel_workers_per_gather": setting,
-        "check": measure_check(conn, filters, num_customers),
-        "count_star_bloom": measure_count_star(conn, filters["bloom"]),
-        "lookup_direct": measure_lookup(conn, keys_by_n),
+        "check": measure_check(conn, filter_bytes, num_customers),
+        "count_star": measure_count_star(conn, filter_bytes),
     }
 
 
 def print_results(calibration):
     """
-    Print both calibrations side by side.
+    Print the calibration results.
 
     Input:  calibration, the dict that is also saved as JSON.
     Output: nothing (prints).
@@ -656,48 +528,23 @@ def print_results(calibration):
 
     print()
     print(f"t_check_ns: full scan of {calibration['customers_rows']:,} rows with sjb_contains "
-          f"({CHECK_NUM_KEYS} keys)")
-    rows = []
-    for mode_name in ["bloom", "exact", "pass"]:
-        off = no_parallel["check"][mode_name]
-        on = with_parallel["check"][mode_name]
-        rows.append({
-            "mode": mode_name,
-            "ms_no_parallel": off["median_ms"],
-            "t_check_ns_no_parallel": off["t_check_ns"],
-            "ms_parallel": on["median_ms"],
-            "t_check_ns_parallel": on["t_check_ns"],
-            "speedup": round(off["median_ms"] / on["median_ms"], 2),
-            "plan_parallel": on["plan"],
-        })
-    common.print_table(rows, ["mode", "ms_no_parallel", "t_check_ns_no_parallel",
-                              "ms_parallel", "t_check_ns_parallel", "speedup", "plan_parallel"])
-    off = no_parallel["count_star_bloom"]
-    on = with_parallel["count_star_bloom"]
-    print(f"  reference, SELECT count(*) with the Bloom filter: {off['median_ms']:.2f} ms "
+          f"(Bloom filter of {CHECK_NUM_KEYS} keys, b = {CHECK_BITS_PER_KEY})")
+    off = no_parallel["check"]
+    on = with_parallel["check"]
+    common.print_table([{
+        "ms_no_parallel": off["median_ms"],
+        "t_check_ns_no_parallel": off["t_check_ns"],
+        "ms_parallel": on["median_ms"],
+        "t_check_ns_parallel": on["t_check_ns"],
+        "speedup": round(off["median_ms"] / on["median_ms"], 2),
+        "plan_parallel": on["plan"],
+    }], ["ms_no_parallel", "t_check_ns_no_parallel", "ms_parallel", "t_check_ns_parallel",
+         "speedup", "plan_parallel"])
+    off = no_parallel["count_star"]
+    on = with_parallel["count_star"]
+    print(f"  reference, SELECT count(*) with the same filter: {off['median_ms']:.2f} ms "
           f"({off['plan']}) vs {on['median_ms']:.2f} ms ({on['plan']}), "
           f"speedup {off['median_ms'] / on['median_ms']:.2f}")
-
-    print()
-    print("direct lookup in site_b (reference only): customer_id = ANY(keys)")
-    rows = []
-    for index, n in enumerate(LOOKUP_N_VALUES):
-        off = no_parallel["lookup_direct"]["points"][index]
-        on = with_parallel["lookup_direct"]["points"][index]
-        rows.append({
-            "n": n,
-            "ms_no_parallel": off["median_ms"],
-            "plan_no_parallel": off["plan"],
-            "ms_parallel": on["median_ms"],
-            "plan_parallel": on["plan"],
-        })
-    common.print_table(rows, ["n", "ms_no_parallel", "plan_no_parallel",
-                              "ms_parallel", "plan_parallel"])
-    for label, result in [("no parallel", no_parallel), ("parallel", with_parallel)]:
-        lookup = result["lookup_direct"]
-        print(f"  fitted line ({label}): time_ms = {lookup['intercept_ms']:.3f} + n * "
-              f"{lookup['slope_ms_per_key']:.6f}  ->  {lookup['t_lookup_us']:.4f} us per key, "
-              f"R^2 = {lookup['r_squared']}")
 
     fdw = calibration["fdw"]
     print()
@@ -711,19 +558,8 @@ def print_results(calibration):
           f"{result['per_row_us']} us * rows, R^2 = {result['r_squared']}")
 
     print()
-    print("t_lookup_us: customer_id = ANY ((SELECT keys)::int4[]) through postgres_fdw")
-    print("  Remote SQL: " + fdw["lookup_end_to_end"]["remote_sql"])
-    common.print_table(fdw["lookup_end_to_end"]["points"],
-                       ["n", "rows", "fdw_ms", "messages", "message_ms", "row_ms",
-                        "per_key_work_ms"])
-    result = fdw["lookup_end_to_end"]
-    print(f"  fitted line: per_key_work_ms = {result['intercept_ms']} + n * "
-          f"{result['t_lookup_us'] / 1000:.6f}  ->  t_lookup_us = {result['t_lookup_us']}, "
-          f"R^2 = {result['r_squared']}")
-
-    print()
     print("t_build_us: sjb_build_auto at site_a")
-    common.print_table(fdw["build"]["points"], ["n", "median_ms", "mode"])
+    common.print_table(fdw["build"]["points"], ["n", "median_ms", "filter"])
     result = fdw["build"]
     print(f"  fitted line: time_ms = {result['intercept_ms']} + n * "
           f"{result['t_build_us'] / 1000:.6f}  ->  t_build_us = {result['t_build_us']}, "
@@ -741,39 +577,26 @@ def main():
     num_customers = count_customers(conn)
     fetch_size = common.fetch_size(conn_a)
 
-    # Part 1 (Batch 5): site B's own work, parallel workers off and on.
-    # The same keys for both.
-    check_keys = random_keys(conn, CHECK_NUM_KEYS)
-    filters = build_filters(conn, check_keys)
-    keys_by_n = {}
-    for n in LOOKUP_N_VALUES:
-        keys_by_n[n] = random_keys(conn, n)
+    # Part 1: site B's own work, parallel workers off and on, with the same
+    # filter.
+    check_filter = build_check_filter(conn, random_keys(conn, CHECK_NUM_KEYS))
+    no_parallel = measure_all(conn, False, check_filter, num_customers)
+    with_parallel = measure_all(conn, True, check_filter, num_customers)
 
-    no_parallel = measure_all(conn, False, filters, keys_by_n, num_customers)
-    with_parallel = measure_all(conn, True, filters, keys_by_n, num_customers)
-
-    # Part 2 (Batch 5b): through postgres_fdw, parallel workers off at both
-    # sites.
+    # Part 2: through postgres_fdw, parallel workers off at both sites.
     set_parallel(conn, False)
     set_parallel(conn_a, False)
     print("Measuring through postgres_fdw ...")
     messages_and_rows = measure_messages_and_rows(conn_a, conn)
 
-    fdw_keys_by_n = {}
-    for n in FDW_LOOKUP_N_VALUES:
-        fdw_keys_by_n[n] = random_keys(conn, n)
-    lookup_end_to_end = measure_lookup_end_to_end(conn_a, fdw_keys_by_n,
-                                                  messages_and_rows["per_message_ms"],
-                                                  messages_and_rows["per_row_us"],
-                                                  fetch_size)
-
+    # Part 3: building the filter at site A.
     build_keys_by_n = {}
     for n in BUILD_N_VALUES:
         build_keys_by_n[n] = random_keys(conn, n)
     model_inputs = {
         "s_rows": num_customers,
-        "row_width": common.avg_row_width("narrow") + 7 + 4 * 2,
-        "t_check_ns": no_parallel["check"]["bloom"]["t_check_ns"],
+        "row_width": common.wire_row_width(common.avg_row_width("narrow"), "narrow"),
+        "t_check_ns": no_parallel["check"]["t_check_ns"],
         "per_message_ms": messages_and_rows["per_message_ms"],
         "per_row_us": messages_and_rows["per_row_us"],
         "fetch_size": fetch_size,
@@ -792,12 +615,10 @@ def main():
         "with_parallel": with_parallel,
         "fdw": {
             "messages_and_rows": messages_and_rows,
-            "lookup_end_to_end": lookup_end_to_end,
             "build": build,
         },
         "suggested": {
-            "t_check_ns": no_parallel["check"]["bloom"]["t_check_ns"],
-            "t_lookup_us": lookup_end_to_end["t_lookup_us"],
+            "t_check_ns": no_parallel["check"]["t_check_ns"],
             "per_message_ms": messages_and_rows["per_message_ms"],
             "per_row_us": messages_and_rows["per_row_us"],
             "t_build_us": build["t_build_us"],

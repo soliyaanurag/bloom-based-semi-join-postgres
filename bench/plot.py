@@ -37,7 +37,7 @@ BENCH_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.normpath(os.path.join(BENCH_DIR, "..", "results"))
 FP_RATE_SQL = os.path.normpath(os.path.join(BENCH_DIR, "..", "queries", "fp_rate.sql"))
 
-STRATEGIES = ["baseline", "exact_keys", "bloom_fixed10", "bloom_dynamic"]
+STRATEGIES = ["baseline", "bloom_fixed10", "bloom_auto"]
 WIDTHS = ["narrow", "wide"]
 
 # One fixed color and marker per strategy, the same in every chart. The
@@ -45,15 +45,13 @@ WIDTHS = ["narrow", "wide"]
 # in black-and-white prints and by colorblind readers too.
 STRATEGY_COLORS = {
     "baseline": "#2a78d6",       # blue
-    "exact_keys": "#eb6834",     # orange
     "bloom_fixed10": "#1baf7a",  # aqua
-    "bloom_dynamic": "#eda100",  # yellow
+    "bloom_auto": "#eda100",     # yellow
 }
 STRATEGY_MARKERS = {
     "baseline": "o",
-    "exact_keys": "s",
     "bloom_fixed10": "^",
-    "bloom_dynamic": "D",
+    "bloom_auto": "D",
 }
 WIDTH_TITLES = {
     "narrow": "narrow rows (order_id, name)",
@@ -157,8 +155,8 @@ def points_for(latest, strategy, width, column, nestloop_off=False):
 def plot_versus_n(latest, width, column, title, y_label, file_name, log_y):
     """
     One chart: a column of results.csv against n, one line per strategy.
-    For time_ms we add a dashed line for exact_keys with enable_nestloop =
-    off, if any run was redone that way.
+    For time_ms we add a dashed line for every strategy that has runs redone
+    with enable_nestloop = off (see run_experiments.py), if there are any.
 
     Input:  latest; width; column; title; y_label; file_name; log_y, True
             for a logarithmic y axis.
@@ -171,12 +169,14 @@ def plot_versus_n(latest, width, column, title, y_label, file_name, log_y):
         axes.plot(x_values, y_values, label=strategy, color=STRATEGY_COLORS[strategy],
                   marker=STRATEGY_MARKERS[strategy], markersize=7, linewidth=2)
 
-    has_nestloop_off_rows = any(key[1] == width and key[3] for key in latest)
-    if column == "time_ms" and has_nestloop_off_rows:
-        x_values, y_values = points_for(latest, "exact_keys", width, column, True)
-        axes.plot(x_values, y_values, label="exact_keys, enable_nestloop = off",
-                  color=STRATEGY_COLORS["exact_keys"], marker=STRATEGY_MARKERS["exact_keys"],
-                  markerfacecolor="white", markersize=7, linewidth=2, linestyle="--")
+    for strategy in STRATEGIES:
+        has_nestloop_off_rows = any(key[0] == strategy and key[1] == width and key[3]
+                                    for key in latest)
+        if column == "time_ms" and has_nestloop_off_rows:
+            x_values, y_values = points_for(latest, strategy, width, column, True)
+            axes.plot(x_values, y_values, label=f"{strategy}, enable_nestloop = off",
+                      color=STRATEGY_COLORS[strategy], marker=STRATEGY_MARKERS[strategy],
+                      markerfacecolor="white", markersize=7, linewidth=2, linestyle="--")
 
     axes.set_xscale("log")
     if log_y:
@@ -204,7 +204,7 @@ def plot_b_sweep(sweep_rows, width):
                              f"{WIDTH_TITLES[width]}",
                              "b = Bloom filter bits per distinct key",
                              "total bytes A->B + B->A (log scale)")
-    axes.plot(b_values, measured, label="measured", color=STRATEGY_COLORS["bloom_dynamic"],
+    axes.plot(b_values, measured, label="measured", color=STRATEGY_COLORS["bloom_auto"],
               marker="D", markersize=7, linewidth=2)
     axes.plot(b_values, predicted, label="cost model prediction", color=INK_COLOR,
               linewidth=1.2, linestyle=":")

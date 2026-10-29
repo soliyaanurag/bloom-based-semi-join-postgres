@@ -1,10 +1,15 @@
 """
 common.py: small helper functions shared by all benchmark scripts.
 
-The benchmark scripts (run_experiments.py, b_sweep.py, plot.py) all need to
-connect to the two sites, run EXPLAIN ANALYZE, find the Foreign Scan in the
-plan, and read numbers out of it. Those jobs live here, one function each,
-so the scripts themselves stay short.
+The benchmark scripts (run_experiments.py, b_sweep.py, plot.py,
+calibrate.py, validate_model.py) all need to connect to the two sites, run
+EXPLAIN ANALYZE, find the Foreign Scan in the plan, and read numbers out of
+it. Those jobs live here, one function each, so the scripts themselves stay
+short.
+
+We always read EXPLAIN in JSON format and look up the fields we need by
+name, so the extra "Semijoin Filter" / "Bloom ..." fields that sjbloom's
+EXPLAIN hook adds to the Foreign Scan node do not disturb anything.
 
 Connection settings come from the usual PostgreSQL environment variables
 (PGHOST, PGPORT, PGUSER; load them with `source setup/env.example.sh`).
@@ -23,6 +28,14 @@ WIDTH_COLUMNS = {
     "narrow": ["customer_id", "name"],
     "wide": ["customer_id", "name", "padding"],
 }
+
+# Cost model inputs that sjb_build_auto needs besides the statistics. The
+# filter's size does not depend on them (only on bytes); they only change
+# the predicted time. NETWORK_MBIT: localhost is treated as a 1000 Mbit/s
+# network. T_CHECK_NS: site B's time to scan and check one row, as
+# calibrated on our machine (bench/calibrate.py).
+NETWORK_MBIT = 1000
+T_CHECK_NS = 158.19
 
 
 def connect(dbname):
@@ -213,6 +226,20 @@ def avg_row_width(width="narrow"):
     row = conn.execute("SELECT avg(" + width_expression + ") FROM customers").fetchone()
     conn.close()
     return float(row[0])
+
+
+def wire_row_width(text_width, width="narrow"):
+    """
+    The width of one returned row ON THE WIRE, the row_width the cost model
+    and sjb_build_auto expect: the text of the values plus PostgreSQL's
+    DataRow message overhead, 7 bytes per row + 4 bytes per column.
+
+    Input:  text_width, the average text width of the row's values (from
+            avg_row_width); width, "narrow" or "wide" (its columns are the
+            columns in the Remote SQL).
+    Output: the wire width in bytes.
+    """
+    return text_width + 7 + 4 * len(WIDTH_COLUMNS[width])
 
 
 def fetch_size(conn):

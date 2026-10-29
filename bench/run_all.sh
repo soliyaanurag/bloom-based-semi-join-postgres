@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# run_all.sh: reruns every Batch 4 experiment and redraws all charts with
-# one command:
+# run_all.sh: reruns the mid-sem benchmark (strategies baseline,
+# bloom_fixed10 and bloom_auto) and redraws all charts with one command:
 #   1. run_experiments.py  (appends to results/results.csv, about 4 minutes)
 #   2. b_sweep.py          (writes results/b_sweep.csv, about 1 minute)
 #   3. plot.py             (writes the PNG charts and results/fp_rate.csv)
 #
 # Needs: the server running, both sites set up (setup/setup_all.sh), and
-# the Python packages in .venv (see docs/WALKTHROUGH.md, Batch 4).
+# the Python packages in .venv (see README.md).
 #
 # Usage (from the project folder):
 #     source setup/env.example.sh

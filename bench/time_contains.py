@@ -8,7 +8,8 @@ The script runs, directly in site_b:
 
     SELECT count(*) FROM customers WHERE sjb_contains(<filter>, customer_id)
 
-for two filters (the sizes bloom_dynamic uses for n = 100 and n = 10000)
+for two filters (about the sizes bloom_auto uses for n = 100 and
+n = 10000, narrow rows)
 and prints the median wall-clock time of 5 runs. It is used to compare two
 versions of the C code (for example before and after a speed-up): the
 counts must stay identical, only the times may change.
@@ -29,7 +30,7 @@ import common
 
 
 # (n, b) of the filters to time.
-CASES = [(100, 26.4), (10000, 16.8)]
+CASES = [(100, 27.73), (10000, 18.13)]
 RUNS = 5
 
 

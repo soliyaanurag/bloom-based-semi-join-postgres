@@ -2,14 +2,16 @@
 run_experiments.py: the main benchmark.
 
 For each width variant (narrow, wide), each n in N_VALUES and each strategy
-(baseline, exact_keys, bloom_fixed10, bloom_dynamic) it:
+(baseline, bloom_fixed10, bloom_auto; see strategies.py) it:
   1. runs the query 3 times under EXPLAIN ANALYZE and keeps the run with
      the median time,
   2. reads from that run: the join type above the Foreign Scan and the
      number of rows site B sent back (remote_rows),
   3. computes the network bytes:
-       bytes_a_to_b = the filter / key list as text (query from strategies.py)
-       bytes_b_to_a = remote_rows * measured average row width (this variant)
+       bytes_a_to_b = the filter as hex text (query from strategies.py)
+       bytes_b_to_a = remote_rows * measured average text width of a row
+                      (this variant): the values only, without protocol
+                      overhead
   4. checks that the result equals the baseline (EXCEPT ALL both ways).
 If the join is a Nested Loop with a Join Filter, the same case is run again
 with SET enable_nestloop = off, and both rows are recorded (column
@@ -82,8 +84,8 @@ def measure_case(conn, strategy_name, width, n, b, sql_text, bytes_sql,
     """
     Measure one strategy for one n and width, and build its result row.
 
-    Input:  conn, a connection to site_a; strategy_name, width, n, b (None
-            when there is no Bloom filter); sql_text and bytes_sql from
+    Input:  conn, a connection to site_a; strategy_name, width, n, b (bits
+            per key; None for the baseline); sql_text and bytes_sql from
             strategies.py; baseline_sql for the correctness check;
             row_width, the measured row width of this variant;
             nestloop_off, True when enable_nestloop is off for this run.
@@ -152,20 +154,25 @@ def main():
     conn = common.connect("site_a")
     warm_up(conn)
 
-    # Measure the row width of each variant once, in site_b.
+    # Measure the row width of each variant once, in site_b. The text width
+    # counts the bytes of the values; the wire width adds PostgreSQL's
+    # DataRow overhead and is what sjb_build_auto needs.
+    s_rows = strategies.foreign_table_rows(conn)
     row_widths = {}
+    wire_widths = {}
     for width in WIDTHS:
         row_widths[width] = common.avg_row_width(width)
-        print(f"Average row width ({width}): {row_widths[width]:.2f} bytes as text")
+        wire_widths[width] = common.wire_row_width(row_widths[width], width)
+        print(f"Average row width ({width}): {row_widths[width]:.2f} bytes as text, "
+              f"{wire_widths[width]:.2f} bytes on the wire")
 
     all_rows = []
     for width in WIDTHS:
         for n in N_VALUES:
-            # The cost model picks b for this n and this variant's row width.
-            dynamic_b = strategies.dynamic_bits(conn, n, row_widths[width])
             baseline_sql, unused_bytes_sql = strategies.baseline(n, width)
+            cases = strategies.all_strategies(conn, n, width, s_rows, wire_widths[width])
 
-            for name, b, sql_text, bytes_sql in strategies.all_strategies(n, width, dynamic_b):
+            for name, b, sql_text, bytes_sql in cases:
                 row, plan = measure_case(conn, name, width, n, b, sql_text, bytes_sql,
                                          baseline_sql, row_widths[width], False)
                 all_rows.append(row)

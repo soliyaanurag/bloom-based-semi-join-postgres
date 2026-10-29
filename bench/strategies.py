@@ -5,25 +5,27 @@ Every strategy computes the same join, orders ⋈ customers, for the orders
 with order_id <= n. They differ only in what site A sends to site B to cut
 down the customers that come back:
 
-  baseline       nothing: B sends all 1,000,000 customers
-  exact_keys     the exact list of needed customer_ids (an int4[] array)
-  bloom_fixed10  a Bloom filter with b = 10 bits per key
-  bloom_dynamic  a Bloom filter whose b comes from the cost model
-                 sjb_best_bits (computed in Python before the query)
+  baseline       nothing: plain postgres_fdw, B sends all 1,000,000
+                 customers
+  bloom_fixed10  a Bloom filter with b = 10 bits per key (sjb_build)
+  bloom_auto     a Bloom filter sized by the cost model at run time
+                 (sjb_build_auto: sizing rules a-d, see sjbloom/costmodel.c)
 
 Each strategy function returns two SQL strings:
   sql_text           the query itself (without EXPLAIN)
   bytes_a_to_b_sql   a query that returns how many bytes site A sends to B
-                     (the filter or key list as TEXT, because postgres_fdw
-                     sends query parameters as text)
+                     (the filter as TEXT, because postgres_fdw sends query
+                     parameters as text: a bytea becomes hex)
 
 The "width" argument picks the select list: "narrow" selects
 o.order_id, c.name; "wide" also selects c.padding (about 100 bytes per row).
 
-The SQL is built with Python f-strings. That is safe here because n and b
-are numbers produced by our own scripts (we force them through int() and
-float()), never text typed by a user.
+The SQL is built with Python f-strings. That is safe here because n, b and
+the statistics are numbers produced by our own scripts (we force them
+through int() and float()), never text typed by a user.
 """
+
+import common
 
 
 # The select list for each width variant.
@@ -31,6 +33,9 @@ SELECT_LISTS = {
     "narrow": "o.order_id, c.name",
     "wide": "o.order_id, c.name, c.padding",
 }
+
+# customer_id is the primary key of customers: one row per key value.
+ROWS_PER_KEY = 1.0
 
 
 def join_sql(n, width, extra_condition=""):
@@ -48,23 +53,10 @@ def join_sql(n, width, extra_condition=""):
             f"WHERE o.order_id <= {int(n)} {extra_condition}")
 
 
-def key_array_sql(n):
-    """
-    A sub-SELECT that returns the distinct customer_ids of the kept orders
-    as one int4[] array. The ::int[] cast is needed so that "= ANY (...)"
-    treats it as an array value, not as a row set (see CLAUDE.md).
-
-    Input:  n, keep orders with order_id <= n.
-    Output: the SQL text, in parentheses.
-    """
-    return (f"((SELECT array_agg(DISTINCT customer_id) "
-            f"FROM orders WHERE order_id <= {int(n)})::int[])")
-
-
 def bloom_filter_sql(n, b):
     """
-    A sub-SELECT that builds the Bloom filter, the same way as
-    queries/bloom_manual.sql:
+    A sub-SELECT that builds the Bloom filter with a chosen b, the same way
+    as queries/bloom_manual.sql:
       m = b bits per distinct key (at least 8 bits)
       k = round(0.693 * b) hash positions per key (at least 1)
 
@@ -74,6 +66,23 @@ def bloom_filter_sql(n, b):
     return (f"(SELECT sjb_build(array_agg(DISTINCT customer_id), "
             f"greatest(8, ceil(count(DISTINCT customer_id) * {float(b)}))::int8, "
             f"greatest(1, round(0.693 * {float(b)}))::int4) "
+            f"FROM orders WHERE order_id <= {int(n)})")
+
+
+def auto_filter_sql(n, s_rows, row_width):
+    """
+    A sub-SELECT that builds the Bloom filter with sjb_build_auto, the same
+    way as queries/auto_manual.sql. No DISTINCT is needed: sjb_build_auto
+    removes NULLs and repeated keys itself. The message, row and build
+    costs use the function's defaults (our calibrated values).
+
+    Input:  n; s_rows, rows of customers; row_width, bytes of one returned
+            row ON THE WIRE (common.wire_row_width).
+    Output: the SQL text, in parentheses.
+    """
+    return (f"(SELECT sjb_build_auto(array_agg(customer_id), {float(s_rows)}, "
+            f"{ROWS_PER_KEY}, {float(row_width)}, {float(common.NETWORK_MBIT)}, "
+            f"{float(common.T_CHECK_NS)}) "
             f"FROM orders WHERE order_id <= {int(n)})")
 
 
@@ -87,33 +96,28 @@ def baseline(n, width):
     return join_sql(n, width), "SELECT 0"
 
 
-def exact_keys(n, width):
+def bloom_query(n, width, filter_sql):
     """
-    The join with "c.customer_id = ANY (array of needed ids)". postgres_fdw
-    sends the array to site B as a parameter, as text like {12,345,...}.
+    The join with "sjb_contains(filter, c.customer_id)". postgres_fdw sends
+    the filter to site B as a parameter, as hex text.
 
-    Input:  n; width, "narrow" or "wide".
+    Input:  n; width; filter_sql, a sub-SELECT that builds the filter.
     Output: (sql_text, bytes_a_to_b_sql). The bytes are the octet_length of
-            the array's text form, exactly what postgres_fdw sends.
+            the filter's text (hex) form.
     """
-    sql_text = join_sql(n, width, f"AND c.customer_id = ANY {key_array_sql(n)}")
-    bytes_sql = f"SELECT octet_length({key_array_sql(n)}::text)"
+    sql_text = join_sql(n, width, f"AND sjb_contains({filter_sql}, c.customer_id)")
+    bytes_sql = f"SELECT octet_length({filter_sql}::text)"
     return sql_text, bytes_sql
 
 
 def bloom_manual(n, b, width):
     """
-    The join with "sjb_contains(bloom filter, c.customer_id)". postgres_fdw
-    sends the filter to site B as a parameter, as hex text.
+    The Bloom join with a chosen b (used by bloom_fixed10 and b_sweep.py).
 
     Input:  n; b, bits per key; width, "narrow" or "wide".
-    Output: (sql_text, bytes_a_to_b_sql). The bytes are the octet_length of
-            the filter's text (hex) form.
+    Output: (sql_text, bytes_a_to_b_sql).
     """
-    filter_sql = bloom_filter_sql(n, b)
-    sql_text = join_sql(n, width, f"AND sjb_contains({filter_sql}, c.customer_id)")
-    bytes_sql = f"SELECT octet_length({filter_sql}::text)"
-    return sql_text, bytes_sql
+    return bloom_query(n, width, bloom_filter_sql(n, b))
 
 
 def bloom_fixed10(n, width):
@@ -127,38 +131,31 @@ def bloom_fixed10(n, width):
     return bloom_manual(n, 10, width)
 
 
-def bloom_dynamic(n, b, width):
+def bloom_auto(n, width, s_rows, row_width):
     """
-    Bloom filter whose b was chosen by the cost model. The caller computes
-    b first with dynamic_bits() below.
+    Bloom filter sized by sjb_build_auto, as the system runs it.
 
-    Input:  n; b, the bits per key from dynamic_bits(); width.
+    Input:  n; width; s_rows, rows of customers; row_width, bytes of one
+            returned row on the wire for this width.
     Output: (sql_text, bytes_a_to_b_sql).
     """
-    return bloom_manual(n, b, width)
+    return bloom_query(n, width, auto_filter_sql(n, s_rows, row_width))
 
 
-def auto_filter(n, width, s_rows, rows_per_key, row_width, network_mbit, t_check_ns):
+def auto_bits_per_key(conn, n, s_rows, row_width):
     """
-    The filter path as the system really runs it (Batch 5): the join with
-    "sjb_contains(sjb_build_auto(keys, ...), c.customer_id)". sjb_build_auto
-    picks the mode (BLOOM, EXACT or PASS) and the Bloom size. The message,
-    row and build costs use the function's defaults (our calibrated
-    values). No DISTINCT is needed: sjb_build_auto removes repeated keys.
+    The bits per key (m / n) of the filter bloom_auto builds for this n.
+    sjb_bloom_estimate runs the same C code as sjb_build_auto, so this is
+    exactly the filter's size, without building it.
 
-    Input:  n; width; s_rows, rows_per_key, row_width (on the wire),
-            network_mbit, t_check_ns: the cost model's inputs.
-    Output: (sql_text, bytes_a_to_b_sql, filter_sql). filter_sql is the
-            sub-SELECT that builds the filter, so the caller can also ask
-            which mode was built.
+    Input:  conn, a connection to site_a; n; s_rows; row_width (wire).
+    Output: b, rounded to 2 decimals.
     """
-    filter_sql = (f"(SELECT sjb_build_auto(array_agg(customer_id), {float(s_rows)}, "
-                  f"{float(rows_per_key)}, {float(row_width)}, {float(network_mbit)}, "
-                  f"{float(t_check_ns)}) "
-                  f"FROM orders WHERE order_id <= {int(n)})")
-    sql_text = join_sql(n, width, f"AND sjb_contains({filter_sql}, c.customer_id)")
-    bytes_sql = f"SELECT octet_length({filter_sql}::text)"
-    return sql_text, bytes_sql, filter_sql
+    n_distinct = distinct_keys(conn, n)
+    row = conn.execute("SELECT bits_per_key FROM sjb_bloom_estimate(%s, %s, %s, %s, %s, %s)",
+                       (n_distinct, s_rows, ROWS_PER_KEY, row_width,
+                        common.NETWORK_MBIT, common.T_CHECK_NS)).fetchone()
+    return round(row[0], 2)
 
 
 def distinct_keys(conn, n):
@@ -186,47 +183,21 @@ def foreign_table_rows(conn):
     return float(conn.execute(sql).fetchone()[0])
 
 
-def dynamic_bits(conn, n, row_width):
+def all_strategies(conn, n, width, s_rows, row_width):
     """
-    Cost model version 1: ask sjb_best_bits for the best bits per key.
+    The three strategies for one n and width, in the order we report them.
 
-    We call it as sjb_best_bits(n_distinct, s_rows, n_distinct, row_width, 2):
-      n          = number of distinct keys in the filter
-      s_rows     = rows of customers (reltuples of the foreign table)
-      matches    = n_distinct, because every customer_id in orders exists
-                   at site B, so each distinct key matches exactly one row
-      row_width  = measured text width of a returned row for this variant
-      2          = the filter travels as hex text (2 bytes per byte)
-
-    If it returns 0 ("Bloom is not worth it"), bloom_filter_sql still
-    builds a tiny 8-bit filter that lets almost everything through, so the
-    query stays correct.
-
-    Input:  conn, a connection to site_a; n; row_width.
-    Output: b, rounded to 2 decimals.
-    """
-    n_distinct = distinct_keys(conn, n)
-    s_rows = foreign_table_rows(conn)
-    row = conn.execute("SELECT sjb_best_bits(%s, %s, %s, %s, 2)",
-                       (n_distinct, s_rows, n_distinct, row_width)).fetchone()
-    return round(row[0], 2)
-
-
-def all_strategies(n, width, dynamic_b):
-    """
-    The four strategies for one n and width, in the order we report them.
-
-    Input:  n; width; dynamic_b, the b from dynamic_bits().
+    Input:  conn, a connection to site_a; n; width; s_rows; row_width, the
+            wire width of a returned row for this width.
     Output: a list of (name, b, sql_text, bytes_a_to_b_sql). b is None for
-            the strategies that have no Bloom filter.
+            the baseline, which has no Bloom filter.
     """
     baseline_sql, baseline_bytes = baseline(n, width)
-    exact_sql, exact_bytes = exact_keys(n, width)
     fixed_sql, fixed_bytes = bloom_fixed10(n, width)
-    dynamic_sql, dynamic_bytes = bloom_dynamic(n, dynamic_b, width)
+    auto_sql, auto_bytes = bloom_auto(n, width, s_rows, row_width)
+    auto_b = auto_bits_per_key(conn, n, s_rows, row_width)
     return [
         ("baseline", None, baseline_sql, baseline_bytes),
-        ("exact_keys", None, exact_sql, exact_bytes),
         ("bloom_fixed10", 10, fixed_sql, fixed_bytes),
-        ("bloom_dynamic", dynamic_b, dynamic_sql, dynamic_bytes),
+        ("bloom_auto", auto_b, auto_sql, auto_bytes),
     ]

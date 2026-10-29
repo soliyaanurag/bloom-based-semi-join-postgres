@@ -12,11 +12,12 @@
 # to site_b with host=localhost, so the capture contains only the traffic
 # between the two sites.
 #
-# Usage:  bench/capture_bytes.sh            (n = 10000, b = 17)
-#         bench/capture_bytes.sh 1000 20    (n = 1000, b = 20)
+# Usage:  bench/capture_bytes.sh            (n = 10000, b = 18, about the
+#                                            b that bloom_auto picks)
+#         bench/capture_bytes.sh 1000 23    (n = 1000, b = 23)
 
 N="${1:-10000}"
-B="${2:-17}"
+B="${2:-18}"
 CAPTURE_FILE="/tmp/sjb_capture.pcap"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -42,6 +43,8 @@ Run these commands yourself (this script does not run them).
 
 5. Compare with our estimate (bytes_a_to_b + bytes_b_to_a = total_bytes).
        psql -X -d site_a -v n=$N -v b=$B -f queries/byte_estimate.sql
+   bytes_a_to_b is also the "Bloom Bytes Sent" line that sjbloom adds
+   under the Foreign Scan in the EXPLAIN output of step 2.
 
 Expect the capture to be LARGER than our estimate. Our estimate counts
 only the filter text and the row values. The capture also contains:
