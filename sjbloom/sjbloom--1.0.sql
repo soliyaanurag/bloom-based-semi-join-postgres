@@ -96,7 +96,7 @@ $$;
 
 /*
  * Step 5: sjb_build_auto. Runs at site A: the cost model sizes the Bloom
- * filter at RUNTIME, when the exact number of distinct keys n is known,
+ * filter at RUNTIME, when the true number of distinct keys n is known,
  * then builds it. It ALWAYS builds a Bloom filter, with these sizing rules
  * (costmodel.c, choose_filter_size):
  *

@@ -107,7 +107,7 @@ WITH plans AS MATERIALIZED (
                'FROM orders WHERE order_id <= 1000), c.customer_id)'))
 )
 SELECT filter_case,
-       node->>'Semijoin Filter' AS semijoin_filter,
+       node->>'Semijoin Filter' AS filter_kind,
        (node->>'Bloom Keys')::int AS bloom_keys,
        node->>'Bloom Size' AS bloom_size,
        node->>'Bloom Predicted FP Rate' AS fp_rate,

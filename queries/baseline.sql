@@ -15,7 +15,7 @@
 \endif
 
 -- Step 2: show the plan with real run times and row counts.
--- VERBOSE adds the "Remote SQL:" line: the exact query sent to site B.
+-- VERBOSE adds the "Remote SQL:" line: the query text sent to site B.
 EXPLAIN (ANALYZE, VERBOSE)
 SELECT o.order_id, c.name
 FROM orders o

@@ -15,7 +15,7 @@
 -- last check makes sure no key is ever lost by its own filter (no false
 -- negatives), for 100,000 random keys.
 --
--- Pass: every missing_rows and extra_rows is 0, and both false-negative
+-- Expected: every missing_rows and extra_rows is 0, and both false-negative
 -- counts are 0.
 --
 -- Run in site_a:  psql -X -d site_a -f queries/edge_cases.sql

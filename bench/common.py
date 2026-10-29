@@ -161,7 +161,7 @@ def remote_rows(node):
 def initplan_ms(plan):
     """
     Total time of the InitPlans in a plan (sub-SELECTs that run once, for
-    example the one that builds the filter or the key list). In JSON
+    example the one that builds the filter). In JSON
     EXPLAIN they are nodes with "Parent Relationship": "InitPlan".
 
     Note: when an InitPlan's result is a parameter of the Foreign Scan,

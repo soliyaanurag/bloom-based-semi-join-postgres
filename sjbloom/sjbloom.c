@@ -324,7 +324,7 @@ remove_duplicates(int32 *keys, int num_keys)
  * Inputs:  keys_array - the SQL array
  * Output:  the palloc'd C array; *num_keys_out = number of unique keys
  *
- * Why it exists: sjb_build_auto needs the exact number of distinct keys
+ * Why it exists: sjb_build_auto needs the true number of distinct keys
  * (the n of the cost model).
  */
 static int32 *
@@ -588,7 +588,7 @@ PG_FUNCTION_INFO_V1(sjb_build_auto);
  * bytes); they are checked and kept so that the same arguments describe
  * the same estimate as sjb_bloom_report.
  *
- * Why it exists: the filter is sized at RUNTIME, when the exact number
+ * Why it exists: the filter is sized at RUNTIME, when the true number
  * of distinct keys is known, not guessed by the planner.
  */
 Datum

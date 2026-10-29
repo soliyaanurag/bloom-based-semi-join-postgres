@@ -14,10 +14,10 @@
  * under the Foreign Scan in EXPLAIN (ANALYZE):
  *
  *   Semijoin Filter: Bloom (sjbloom)
- *   Bloom Keys: 9946
- *   Bloom Size: m=179156 bits, k=12, 18.01 bits/key, 49.87% bits set
- *   Bloom Predicted FP Rate: 0.000237
- *   Bloom Bytes Sent: 44840 bytes
+ *   Bloom Keys: 9955
+ *   Bloom Size: m=179299 bits, k=12, 18.01 bits/key, 48.70% bits set
+ *   Bloom Predicted FP Rate: 0.000175248
+ *   Bloom Bytes Sent: 44876 bytes
  *
  * How: PostgreSQL 18 has a hook, explain_per_node_hook, that EXPLAIN
  * calls for every plan node after printing that node's own lines. Our

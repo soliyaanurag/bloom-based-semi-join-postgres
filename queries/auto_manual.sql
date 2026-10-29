@@ -3,7 +3,7 @@
 --
 -- The join with an AUTOMATICALLY SIZED Bloom filter. Site A collects the
 -- customer_ids of the kept orders, and sjb_build_auto sizes the Bloom
--- filter at RUNTIME, from the exact number of distinct keys and the
+-- filter at RUNTIME, from the true number of distinct keys and the
 -- catalog statistics of customers (sizing rules a-d, see
 -- sjbloom/costmodel.c). Site B keeps the rows that pass sjb_contains; the
 -- normal join at A removes the Bloom false positives.
