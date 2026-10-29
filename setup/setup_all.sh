@@ -8,12 +8,12 @@
 #                          connect A to B with postgres_fdw
 #   4. CREATE EXTENSION sjbloom in site_b and in site_a
 #   5. enable_sjbloom.sql - let postgres_fdw send sjbloom functions to B
-#   6. enable_semijoin.sql - (Batch 6) preload postgres_fdw in site_a and
-#                          opt in with semijoin_filter = true
+#
+# It uses PostgreSQL's own, unmodified postgres_fdw. The Bloom semi-join is
+# written by hand in the queries (see queries/bloom_manual.sql).
 #
 # Before the first run, build and install the extension once:
 #     make -C sjbloom install
-# and install the modified postgres_fdw (see docs/WALKTHROUGH.md, Batch 6).
 #
 # Usage (from the project folder):
 #     source setup/env.example.sh
@@ -37,23 +37,20 @@ if [ -z "${PGPASSWORD:-}" ]; then
     echo "      That is fine if your server uses trust authentication."
 fi
 
-echo "=== Step 1/6: create site_a and site_b ==="
+echo "=== Step 1/5: create site_a and site_b ==="
 $PSQL -d postgres -f "$SETUP_DIR/create_sites.sql"
 
-echo "=== Step 2/6: load customers into site_b ==="
+echo "=== Step 2/5: load customers into site_b ==="
 $PSQL -d site_b -f "$SETUP_DIR/site_b_data.sql"
 
-echo "=== Step 3/6: load orders into site_a and set up postgres_fdw ==="
+echo "=== Step 3/5: load orders into site_a and set up postgres_fdw ==="
 $PSQL -v pgpass="${PGPASSWORD:-}" -d site_a -f "$SETUP_DIR/site_a_setup.sql"
 
-echo "=== Step 4/6: create the sjbloom extension in site_b and site_a ==="
+echo "=== Step 4/5: create the sjbloom extension in site_b and site_a ==="
 $PSQL -d site_b -c "CREATE EXTENSION sjbloom;"
 $PSQL -d site_a -c "CREATE EXTENSION sjbloom;"
 
-echo "=== Step 5/6: let postgres_fdw send sjbloom functions to site_b ==="
+echo "=== Step 5/5: let postgres_fdw send sjbloom functions to site_b ==="
 $PSQL -d site_a -f "$SETUP_DIR/enable_sjbloom.sql"
-
-echo "=== Step 6/6: turn on the automatic semijoin rewrite in site_a ==="
-$PSQL -d site_a -f "$SETUP_DIR/enable_semijoin.sql"
 
 echo "=== Setup finished ==="
